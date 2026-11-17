@@ -15,6 +15,8 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # A manual run is a DRY RUN: tests, build, SBOMs, the image build and smoke; nothing is attested, pushed or released.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -45,7 +47,7 @@ jobs:
       - name: Version from the tag
         id: v
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || 'v0.0.0-dryrun' }}
         run: |
           v="${TAG#v}"
           if ! echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then echo "::error::tag $TAG is not v<semver>"; exit 1; fi
@@ -69,7 +71,10 @@ jobs:
         run: |
           dist/konect-bootstrap-linux-x64 version --json | tee keys.json
           jq -e --arg v "$VERSION" '.version == $v' keys.json >/dev/null || { echo "::error::version mismatch"; exit 1; }
-          jq -e '(.keys // []) | length >= 1' keys.json >/dev/null || { echo "::error::no release key is compiled in (internal/verify/keys.go): this bootstrap could verify nothing"; exit 1; }
+          if ! jq -e '(.keys // []) | length >= 1' keys.json >/dev/null; then
+            if [ "$GITHUB_EVENT_NAME" = push ]; then echo "::error::no release key is compiled in (internal/verify/keys.go): this bootstrap could verify nothing"; exit 1; fi
+            echo "::warning::dry run: no release key is compiled in yet"
+          fi
           jq -e '[.keys[].keyId] | all(startswith("konect-release-"))' keys.json >/dev/null || { echo "::error::a non-release key is compiled in"; exit 1; }
           dist/konect-bootstrap-linux-x64 version
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
@@ -83,6 +88,7 @@ jobs:
             "$SYFT" scan "file:dist/konect-bootstrap-$p" -o "spdx-json=dist/sbom/konect-bootstrap-$p.spdx.json"
           done
       - name: Build provenance (all four binaries)
+        if: github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -91,21 +97,25 @@ jobs:
             dist/konect-bootstrap-macos-arm64
             dist/konect-bootstrap-macos-x64
       - name: SBOM attestation linux-x64
+        if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: dist/konect-bootstrap-linux-x64
           sbom-path: dist/sbom/konect-bootstrap-linux-x64.spdx.json
       - name: SBOM attestation linux-arm64
+        if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: dist/konect-bootstrap-linux-arm64
           sbom-path: dist/sbom/konect-bootstrap-linux-arm64.spdx.json
       - name: SBOM attestation macos-arm64
+        if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: dist/konect-bootstrap-macos-arm64
           sbom-path: dist/sbom/konect-bootstrap-macos-arm64.spdx.json
       - name: SBOM attestation macos-x64
+        if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: dist/konect-bootstrap-macos-x64
@@ -161,11 +171,13 @@ jobs:
       - name: Boot it read-only
         run: bash scripts/image-smoke.sh konect-bootstrap:release-check "$VERSION"
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        if: github.event_name == 'push'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push (linux/amd64 + linux/arm64)
+        if: github.event_name == 'push'
         id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -177,6 +189,7 @@ jobs:
           tags: ${{ env.IMAGE }}:${{ env.VERSION }}
           build-args: VERSION=${{ env.VERSION }}
       - name: Build provenance for the image
+        if: github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
@@ -184,12 +197,15 @@ jobs:
           push-to-registry: true
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         id: syft
+        if: github.event_name == 'push'
       - name: Image SBOM (SPDX)
+        if: github.event_name == 'push'
         env:
           SYFT: ${{ steps.syft.outputs.cmd }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: '"$SYFT" scan "registry:$IMAGE@$DIGEST" -o spdx-json=image.spdx.json'
       - name: SBOM attestation for the image
+        if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ env.IMAGE }}
@@ -197,7 +213,9 @@ jobs:
           sbom-path: image.spdx.json
           push-to-registry: true
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        if: github.event_name == 'push'
       - name: Sign the image (cosign keyless) and verify the signature
+        if: github.event_name == 'push'
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
           REPO: ${{ github.repository }}
@@ -207,12 +225,14 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity-regexp "^https://github.com/$REPO/.github/workflows/release.yml@refs/tags/v" >/dev/null
       - name: Summary
+        if: github.event_name == 'push'
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: echo "Pushed \`$IMAGE:$VERSION\` = \`$IMAGE@$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
 
   release:
     name: GitHub Release
+    if: github.event_name == 'push'
     needs: [build, image]
     runs-on: ubuntu-latest
     timeout-minutes: 10
