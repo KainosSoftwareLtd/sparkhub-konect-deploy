@@ -1,0 +1,87 @@
+# SQLite shape: exactly ONE replica (the instance lease refuses a second writer on the same volume);
+# `strategy: Recreate` so the new pod never overlaps the old one on the RWO volume.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: konect
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: konect
+  template:
+    metadata:
+      labels:
+        app: konect
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: konect
+          image: ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:<digest from SparkHub → Konect → Install>   # pin the digest, never a tag
+          args: ["serve", "--host", "0.0.0.0", "--insecure-http"]
+          ports:
+            - name: http
+              containerPort: 41800
+          env:
+            # The bootstrap gets the signed release for KONECT_VERSION (ConfigMap) with the install token, verifies it,
+            # caches it under /data/.konect-bootstrap and execs it; Konect never sees the token.
+            - name: KONECT_INSTALL_TOKEN
+              valueFrom: { secretKeyRef: { name: konect, key: KONECT_INSTALL_TOKEN } }
+            - name: KONECT_CONFIG
+              value: builtin:sqlite
+            - name: KONECT_LOCAL_KEY_FILE
+              value: /run/secrets/konect/konect-local.key
+            # A Secret volume's files are root-owned with the platform's mode bits (0440 + fsGroup here, so uid 65532
+            # reads them through the group): declare the mount so the owner-only check is skipped (the dataDir rule stays).
+            - name: KONECT_LOCAL_KEY_FILE_MOUNTED
+              value: "1"
+            # Optional: only with a deploy-time sign-in (KONECT_IDP_*); without it a Konect manager configures sign-in in the UI.
+            - name: KONECT_IDP_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: konect, key: KONECT_IDP_CLIENT_SECRET, optional: true } }
+          envFrom:
+            - configMapRef: { name: konect }
+          volumeMounts:
+            - name: data
+              mountPath: /data     # the PVC root is the platform's (root:fsGroup); Konect works in /data/konect, which it creates 0700
+            - name: secrets
+              mountPath: /run/secrets/konect
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          # Liveness: /v1/health answers 200 even when LOCKED (the key is not yet available and the instance heals by itself, RV24) —
+          # a restart would not help. Readiness: /v1/ready is 503 while locked or migrating, so the pod leaves the Service.
+          livenessProbe:
+            httpGet: { path: /v1/health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /v1/ready, port: http }
+            periodSeconds: 10
+          startupProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 5
+            failureThreshold: 60   # 5 minutes: the first start downloads Konect (about 35 MB)
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: konect-data
+        - name: secrets
+          secret:
+            secretName: konect
+            defaultMode: 0440   # group-readable for fsGroup 65532 (a 0400 root-owned file would be unreadable by the container user)
+            items:
+              - key: konect-local.key
+                path: konect-local.key

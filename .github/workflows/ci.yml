@@ -1,0 +1,93 @@
+name: CI
+
+# Every pull request and every push to main:
+#   test    gofmt, vet (linux, darwin, e2e tag), unit tests with -race, the e2e suite against a stub resolve
+#           (including a noexec cache on a tmpfs: the memfd path), the release matrix built twice and compared
+#           (reproducible), shellcheck
+#   image   the bootstrap image for linux/amd64, booted read-only; its binaries for amd64 and arm64 equal the
+#           ones scripts/build.sh produces (the image and the release assets are the same bytes)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: 1.27.4
+
+jobs:
+  test:
+    name: test + e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "::error::gofmt needed: $unformatted"; gofmt -d .; exit 1; fi
+      - name: go vet (linux, darwin, e2e)
+        run: |
+          go vet ./...
+          GOOS=darwin GOARCH=arm64 go vet ./...
+          GOARCH=arm64 go vet ./...
+          go vet -tags e2e ./...
+      - name: Unit tests
+        run: go test -race -count=1 ./...
+      - name: e2e against a stub resolve (with a noexec tmpfs for the memfd path)
+        run: |
+          sudo mkdir -p /mnt/noexec
+          sudo mount -t tmpfs -o noexec,nosuid,nodev,size=512m,mode=1777 tmpfs /mnt/noexec
+          E2E_NOEXEC_DIR=/mnt/noexec go test -tags e2e -count=1 -v ./e2e/
+      - name: Release matrix, built twice, byte-identical
+        run: |
+          scripts/build.sh /tmp/dist-a 0.0.0-ci
+          scripts/build.sh /tmp/dist-b 0.0.0-ci
+          diff /tmp/dist-a/SHA256SUMS /tmp/dist-b/SHA256SUMS
+          /tmp/dist-a/konect-bootstrap-linux-x64 version
+      - name: shellcheck
+        run: shellcheck install/install.sh scripts/*.sh
+
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: The image's binaries equal scripts/build.sh's (amd64 + arm64)
+        run: |
+          scripts/build.sh /tmp/dist 0.0.0-ci
+          docker buildx build --platform linux/amd64,linux/arm64 --target binary --build-arg VERSION=0.0.0-ci \
+            --output type=local,dest=/tmp/img .
+          cmp /tmp/dist/konect-bootstrap-linux-x64 /tmp/img/linux_amd64/konect-bootstrap
+          cmp /tmp/dist/konect-bootstrap-linux-arm64 /tmp/img/linux_arm64/konect-bootstrap
+      - name: Build the linux/amd64 image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: konect-bootstrap:ci
+          build-args: VERSION=0.0.0-ci
+      - name: Boot it read-only
+        run: bash scripts/image-smoke.sh konect-bootstrap:ci 0.0.0-ci

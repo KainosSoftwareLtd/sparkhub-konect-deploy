@@ -1,0 +1,261 @@
+name: Release
+
+# A `v*` tag of this repository (tag creation is limited to the repository admins by the release-tags ruleset):
+#
+#   build     tests + e2e, the four binaries (scripts/build.sh, reproducible), a check that they trust the release
+#             keys and only them, an SPDX SBOM per binary, build-provenance and SBOM attestations per binary
+#   image     proves the image's binaries are the release assets (byte-identical), boots the image read-only, pushes
+#             ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap:<version> (linux/amd64 + linux/arm64), attests
+#             provenance and an SBOM for the index digest (pushed to the registry) and signs it with cosign (keyless)
+#   release   the GitHub Release: binaries, SHA256SUMS, SBOMs, and the image index digest in the notes
+#
+# SparkHub's catalog import (core: scripts/ops/konect-release-import.ts --kind=bootstrap) reads SHA256SUMS and the
+# digest from this release and verifies the attestations; that import is a separate step, on Leo's go.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: 1.27.4
+  IMAGE: ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap
+
+jobs:
+  build:
+    name: build + verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # attestations
+      attestations: write
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Version from the tag
+        id: v
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          v="${TAG#v}"
+          if ! echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then echo "::error::tag $TAG is not v<semver>"; exit 1; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Tests and e2e
+        run: |
+          go vet ./... && go vet -tags e2e ./...
+          go test -race -count=1 ./...
+          sudo mkdir -p /mnt/noexec
+          sudo mount -t tmpfs -o noexec,nosuid,nodev,size=512m,mode=1777 tmpfs /mnt/noexec
+          E2E_NOEXEC_DIR=/mnt/noexec go test -tags e2e -count=1 ./e2e/
+      - name: Build the four binaries (reproducible)
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          scripts/build.sh dist "$VERSION"
+      - name: The binaries carry this version and trust the release keys, and only them
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          dist/konect-bootstrap-linux-x64 version --json | tee keys.json
+          jq -e --arg v "$VERSION" '.version == $v' keys.json >/dev/null || { echo "::error::version mismatch"; exit 1; }
+          jq -e '(.keys // []) | length >= 1' keys.json >/dev/null || { echo "::error::no release key is compiled in (internal/verify/keys.go): this bootstrap could verify nothing"; exit 1; }
+          jq -e '[.keys[].keyId] | all(startswith("konect-release-"))' keys.json >/dev/null || { echo "::error::a non-release key is compiled in"; exit 1; }
+          dist/konect-bootstrap-linux-x64 version
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        id: syft
+      - name: SBOM per binary (SPDX)
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: |
+          mkdir -p dist/sbom
+          for p in linux-x64 linux-arm64 macos-arm64 macos-x64; do
+            "$SYFT" scan "file:dist/konect-bootstrap-$p" -o "spdx-json=dist/sbom/konect-bootstrap-$p.spdx.json"
+          done
+      - name: Build provenance (all four binaries)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/konect-bootstrap-linux-x64
+            dist/konect-bootstrap-linux-arm64
+            dist/konect-bootstrap-macos-arm64
+            dist/konect-bootstrap-macos-x64
+      - name: SBOM attestation linux-x64
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/konect-bootstrap-linux-x64
+          sbom-path: dist/sbom/konect-bootstrap-linux-x64.spdx.json
+      - name: SBOM attestation linux-arm64
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/konect-bootstrap-linux-arm64
+          sbom-path: dist/sbom/konect-bootstrap-linux-arm64.spdx.json
+      - name: SBOM attestation macos-arm64
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/konect-bootstrap-macos-arm64
+          sbom-path: dist/sbom/konect-bootstrap-macos-arm64.spdx.json
+      - name: SBOM attestation macos-x64
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/konect-bootstrap-macos-x64
+          sbom-path: dist/sbom/konect-bootstrap-macos-x64.spdx.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  image:
+    name: image
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # attestations, cosign keyless
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: The image's binaries are the release assets (byte-identical)
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 --target binary --build-arg "VERSION=$VERSION" \
+            --output type=local,dest=/tmp/img .
+          cmp dist/konect-bootstrap-linux-x64 /tmp/img/linux_amd64/konect-bootstrap
+          cmp dist/konect-bootstrap-linux-arm64 /tmp/img/linux_arm64/konect-bootstrap
+      - name: Build the linux/amd64 image (loaded, not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: konect-bootstrap:release-check
+          build-args: VERSION=${{ env.VERSION }}
+      - name: Boot it read-only
+        run: bash scripts/image-smoke.sh konect-bootstrap:release-check "$VERSION"
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push (linux/amd64 + linux/arm64)
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+          build-args: VERSION=${{ env.VERSION }}
+      - name: Build provenance for the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        id: syft
+      - name: Image SBOM (SPDX)
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: '"$SYFT" scan "registry:$IMAGE@$DIGEST" -o spdx-json=image.spdx.json'
+      - name: SBOM attestation for the image
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: image.spdx.json
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - name: Sign the image (cosign keyless) and verify the signature
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          REPO: ${{ github.repository }}
+        run: |
+          cosign sign --yes "$IMAGE@$DIGEST"
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp "^https://github.com/$REPO/.github/workflows/release.yml@refs/tags/v" >/dev/null
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: echo "Pushed \`$IMAGE:$VERSION\` = \`$IMAGE@$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: GitHub Release
+    needs: [build, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - name: Verify the artifact against SHA256SUMS
+        run: cd dist && sha256sum -c SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          pre=""
+          case "$VERSION" in *-*) pre="--prerelease" ;; esac
+          cat > notes.md <<NOTES
+          Konect bootstrap $TAG. It holds no Konect code: it gets the signed Konect release from SparkHub, verifies it and runs it.
+
+          **Image (pin the digest, never the tag):** \`$IMAGE@$DIGEST\` (linux/amd64 + linux/arm64; \`$IMAGE:$VERSION\`)
+
+          | Platform | Asset |
+          |---|---|
+          | Linux x64 | \`konect-bootstrap-linux-x64\` |
+          | Linux arm64 | \`konect-bootstrap-linux-arm64\` |
+          | macOS Apple silicon | \`konect-bootstrap-macos-arm64\` |
+          | macOS Intel | \`konect-bootstrap-macos-x64\` |
+
+          Check:
+          - \`sha256sum -c SHA256SUMS --ignore-missing\`
+          - \`gh attestation verify konect-bootstrap-linux-x64 --repo $REPO\` (build provenance and SBOM)
+          - \`gh attestation verify oci://$IMAGE@$DIGEST --repo $REPO\`
+          - \`cosign verify $IMAGE@$DIGEST --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/$REPO/.github/workflows/release.yml@refs/tags/v'\`
+          - Rebuild: \`scripts/build.sh dist ${VERSION}\` with Go $GO_VERSION gives the same SHA256SUMS.
+          NOTES
+          gh release create "$TAG" --repo "$REPO" --verify-tag $pre --title "Konect bootstrap $TAG" --notes-file notes.md \
+            dist/konect-bootstrap-linux-x64 dist/konect-bootstrap-linux-arm64 dist/konect-bootstrap-macos-arm64 dist/konect-bootstrap-macos-x64 \
+            dist/SHA256SUMS dist/sbom/*.spdx.json
+          echo "$IMAGE@$DIGEST" > image-digest.txt
+          gh release upload "$TAG" --repo "$REPO" image-digest.txt
