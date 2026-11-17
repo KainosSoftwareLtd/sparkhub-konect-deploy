@@ -1,17 +1,19 @@
-// Package verify implements the Konect release verifier contract (design #1702 §3.7).
+// Package verify implements the Konect release verifier contract (design #1702 §3.7), mirroring
+// verifyKonectRelease(manifestBytes, sigBytes, trustedKeys, expect) of the train module
+// sparkhub-workday-gateway/src/konect/releases.ts. Both must give the same answer for every vector in
+// fixtures/konect-releases/vectors.json (fixtures_test.go). The order of the rules is part of the contract:
 //
-// It mirrors verifyRelease(manifestBytes, sigBytes, trustedKeys, expect) of the train module T/releases.ts.
-// The order of the rules is part of the contract:
-//
-//  1. Trusted keys are compiled in (keys.go). Each has a keyId, a public key and a fixed algorithm
-//     (ECDSA P-256 / SHA-256). Nothing in the files selects the algorithm.
-//  2. manifest.sig.json is parsed strictly: schema "konect-release-signature/1", 1 to 4 entries.
-//  3. Entries whose keyId is not trusted, or that are junk, are ignored.
-//  4. At least one valid signature from a trusted key over the exact manifest.json bytes is required.
-//  5. Only then is the manifest parsed (from the verified bytes, never re-serialised) and checked, in order:
-//     schema, shape, version = the requested version, tag = "v" + version, channel, this platform's entry.
-//  6. Only then are objectSha256, objectSize, sha256 and size of that entry used.
-//  7. A failure names the rule, never the bytes.
+//  1. Trusted keys are compiled in (keys.go): a keyId and a P-256 public key; the algorithm is fixed (ECDSA P-256 /
+//     SHA-256, DER signatures). Nothing in the files selects it. No keys: keys_not_pinned.
+//  2. The request: an exact version, a known environment (dev, preprod, prod). Else request_invalid.
+//  3. manifest.sig.json is parsed strictly (≤ 16 KiB, a JSON object, schema "konect-release-signature/1", 1 to 4
+//     entries): sig_file_invalid. The manifest is at most 64 KiB: manifest_invalid.
+//  4. Entries whose keyId is not trusted, or that are junk, are ignored.
+//  5. At least one valid signature from a trusted key over the exact manifest.json bytes: sig_none_valid.
+//  6. Only then is the manifest parsed (from the verified bytes, never re-serialised): its shape (manifest_invalid),
+//     version = the requested version (version_mismatch), tag = "v" + version (tag_mismatch), a prerelease never on
+//     prod (channel_refused), the entry for the platform (platform_missing).
+//  7. Only then are objectSha256, objectSize, sha256 and size of that entry used. A failure names the rule.
 package verify
 
 import (
@@ -19,14 +21,16 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Schema identifiers.
@@ -35,27 +39,32 @@ const (
 	ManifestSchema  = "konect-release-manifest/1"
 )
 
-// MaxArtifactSize caps every size a manifest may declare (1 GiB); a release binary is about 100 MB.
-const MaxArtifactSize int64 = 1 << 30
-
-// MaxFileSize caps manifest.json and manifest.sig.json when they are read from disk or the network.
-const MaxFileSize = 1 << 20
-
-// Rule names (contract rule 7). They match T/releases.ts.
+// Size caps (T/releases.ts).
 const (
-	RuleSigInvalid        = "sig_invalid"        // manifest.sig.json is not a JSON object
-	RuleSigSchema         = "sig_schema"         // wrong or missing schema
-	RuleSigCount          = "sig_count"          // signatures is not a list of 1 to 4 entries
-	RuleSigNoneValid      = "sig_none_valid"     // no valid signature from a trusted key
-	RuleManifestInvalid   = "manifest_invalid"   // not JSON, or not the manifest shape
-	RuleManifestSchema    = "manifest_schema"    // wrong or missing schema
-	RuleVersionMismatch   = "version_mismatch"   // version is not the requested one
-	RuleTagMismatch       = "tag_mismatch"       // tag is not "v" + version
-	RuleChannelInvalid    = "channel_invalid"    // channel unknown, or not consistent with the version
-	RuleChannelRefused    = "channel_refused"    // a prerelease on prod
-	RulePlatformMissing   = "platform_missing"   // no entry for this platform
-	RulePlatformDuplicate = "platform_duplicate" // more than one entry for this platform
+	MaxManifestSize      = 65536
+	MaxSignatureFileSize = 16384
+	MaxSignatures        = 4
+	MaxArtifactSize      = int64(1) << 30
+	// MaxFileSize caps either file when it is read from disk or the network (the verifier applies the exact caps).
+	MaxFileSize = MaxManifestSize
 )
+
+// Rule names (contract rule 7). They are T/releases.ts's KONECT_RELEASE_VERIFY_ERROR_CODES.
+const (
+	RuleKeysNotPinned   = "keys_not_pinned"
+	RuleKeysInvalid     = "keys_invalid"
+	RuleRequestInvalid  = "request_invalid"
+	RuleSigFileInvalid  = "sig_file_invalid"
+	RuleSigNoneValid    = "sig_none_valid"
+	RuleManifestInvalid = "manifest_invalid"
+	RuleVersionMismatch = "version_mismatch"
+	RuleTagMismatch     = "tag_mismatch"
+	RuleChannelRefused  = "channel_refused"
+	RulePlatformMissing = "platform_missing"
+)
+
+// Environments a request may name.
+var Environments = map[string]bool{"dev": true, "preprod": true, "prod": true}
 
 // Error is a refusal by the verifier. Rule is one of the Rule* names.
 type Error struct {
@@ -83,9 +92,9 @@ func RuleOf(err error) string {
 
 // Expect is what the caller asked for.
 type Expect struct {
-	Version  string // the requested version (KONECT_VERSION)
-	Prod     bool   // KONECT_SPARKHUB=prod: a prerelease manifest is refused
-	Platform string // linux-x64, linux-arm64, macos-arm64, macos-x64, windows-x64, node
+	Version     string // the requested version (KONECT_VERSION)
+	Environment string // dev | preprod | prod; prod refuses a prerelease manifest
+	Platform    string // linux-x64, linux-arm64, macos-arm64, macos-x64, windows-x64, node; "" = the whole manifest
 }
 
 // Artifact is one entry of the manifest.
@@ -94,7 +103,7 @@ type Artifact struct {
 	Platform     string
 	SHA256       string // the binary
 	Size         int64
-	Object       string // the gzip object's name in the bucket
+	Object       string // the gzip object's name in the bucket: <name>.gz
 	ObjectSHA256 string
 	ObjectSize   int64
 	Encoding     string
@@ -110,17 +119,27 @@ type Manifest struct {
 	Artifacts []Artifact
 }
 
-// Result is a verified release for one platform.
+// Result is a verified release.
 type Result struct {
-	Manifest *Manifest
-	Artifact Artifact // the entry for Expect.Platform
-	KeyID    string   // the trusted key whose signature verified
+	Manifest       *Manifest
+	Artifact       Artifact // the entry for Expect.Platform (zero when Platform is "")
+	KeyID          string   // the first trusted key whose signature verified
+	KeyIDs         []string // every trusted key id with a valid signature, in file order
+	ManifestSHA256 string
 }
+
+// VersionPattern is T/releases.ts's KONECT_VERSION_PATTERN: SemVer X.Y.Z with an optional pre-release, no build
+// metadata, no "v"; at most 64 characters (checked separately).
+var VersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?$`)
+
+// ValidVersion reports whether v is an exact release version.
+func ValidVersion(v string) bool { return len(v) <= 64 && VersionPattern.MatchString(v) }
 
 var (
 	hex64Re   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	commitRe  = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	semverRe  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
+	base64Re  = regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`)
+	dateRe    = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z$`)
 	artifacts = map[string]string{ // platform -> artifact name
 		"linux-x64":   "konect-linux-x64",
 		"linux-arm64": "konect-linux-arm64",
@@ -136,78 +155,40 @@ func ArtifactName(platform string) string { return artifacts[platform] }
 
 // Release runs the verifier contract over the exact bytes of manifest.json and manifest.sig.json.
 func Release(manifestBytes, sigBytes []byte, keys []Key, exp Expect) (*Result, error) {
-	keyID, err := checkSignatures(manifestBytes, sigBytes, keys)
+	// Rule 1.
+	if len(keys) == 0 {
+		return nil, fail(RuleKeysNotPinned, "")
+	}
+	seen := map[string]bool{}
+	for _, k := range keys {
+		if k.ID == "" || len(k.ID) > 128 || k.Pub == nil || seen[k.ID] {
+			return nil, fail(RuleKeysInvalid, "")
+		}
+		seen[k.ID] = true
+	}
+	// Rule 2.
+	if !ValidVersion(exp.Version) || !Environments[exp.Environment] {
+		return nil, fail(RuleRequestInvalid, "")
+	}
+	// Rule 3.
+	entries, err := parseSignatureFile(sigBytes)
 	if err != nil {
 		return nil, err
 	}
-	m, err := parseManifest(manifestBytes)
-	if err != nil {
-		return nil, err
+	if len(manifestBytes) > MaxManifestSize {
+		return nil, fail(RuleManifestInvalid, "too large")
 	}
-	if m.Version != exp.Version {
-		return nil, fail(RuleVersionMismatch, "")
-	}
-	if m.Tag != "v"+m.Version {
-		return nil, fail(RuleTagMismatch, "")
-	}
-	// "prerelease" exactly when the version has a pre-release suffix; never on prod.
-	pre := strings.Contains(m.Version, "-")
-	switch {
-	case m.Channel == "release" && !pre:
-	case m.Channel == "prerelease" && pre:
-		if exp.Prod {
-			return nil, fail(RuleChannelRefused, "a prerelease is never run against prod")
-		}
-	case m.Channel == "release" || m.Channel == "prerelease":
-		return nil, fail(RuleChannelInvalid, "channel does not match the version")
-	default:
-		return nil, fail(RuleChannelInvalid, "unknown channel")
-	}
-	var found []Artifact
-	for _, a := range m.Artifacts {
-		if a.Platform == exp.Platform {
-			found = append(found, a)
-		}
-	}
-	switch len(found) {
-	case 0:
-		return nil, fail(RulePlatformMissing, exp.Platform)
-	case 1:
-	default:
-		return nil, fail(RulePlatformDuplicate, exp.Platform)
-	}
-	return &Result{Manifest: m, Artifact: found[0], KeyID: keyID}, nil
-}
-
-// checkSignatures applies rules 2 to 4 and returns the id of the key that verified.
-func checkSignatures(manifestBytes, sigBytes []byte, keys []Key) (string, error) {
-	obj, err := objectFields(sigBytes)
-	if err != nil {
-		return "", fail(RuleSigInvalid, "")
-	}
-	if s, ok := stringField(obj, "schema"); !ok || s != SignatureSchema {
-		return "", fail(RuleSigSchema, "")
-	}
-	raw, ok := obj["signatures"]
-	if !ok {
-		return "", fail(RuleSigCount, "")
-	}
-	var entries []json.RawMessage
-	if err := json.Unmarshal(raw, &entries); err != nil || entries == nil {
-		return "", fail(RuleSigCount, "")
-	}
-	if len(entries) < 1 || len(entries) > 4 {
-		return "", fail(RuleSigCount, "")
-	}
+	// Rules 4-5.
 	digest := sha256.Sum256(manifestBytes)
+	var valid []string
 	for _, e := range entries {
 		fields, err := objectFields(e)
 		if err != nil {
-			continue // junk entry: ignored (rule 3)
+			continue
 		}
 		id, ok1 := stringField(fields, "keyId")
 		sig64, ok2 := stringField(fields, "sig")
-		if !ok1 || !ok2 {
+		if !ok1 || !ok2 || contains(valid, id) {
 			continue
 		}
 		var key *Key
@@ -218,64 +199,146 @@ func checkSignatures(manifestBytes, sigBytes []byte, keys []Key) (string, error)
 			}
 		}
 		if key == nil {
-			continue // unknown key id: ignored (rule 3)
+			continue
 		}
-		der, err := base64.StdEncoding.Strict().DecodeString(sig64)
-		if err != nil || len(der) == 0 || len(der) > 80 {
+		der, ok := decodeBase64(sig64)
+		if !ok {
 			continue
 		}
 		if ecdsa.VerifyASN1(key.Pub, digest[:], der) {
-			return key.ID, nil
+			valid = append(valid, id)
 		}
 	}
-	return "", fail(RuleSigNoneValid, "")
+	if len(valid) == 0 {
+		return nil, fail(RuleSigNoneValid, "")
+	}
+	// Rule 6.
+	m, err := parseManifest(manifestBytes)
+	if err != nil {
+		return nil, err
+	}
+	if m.Version != exp.Version {
+		return nil, fail(RuleVersionMismatch, "")
+	}
+	if m.Tag != "v"+m.Version {
+		return nil, fail(RuleTagMismatch, "")
+	}
+	if m.Channel != "release" && exp.Environment == "prod" {
+		return nil, fail(RuleChannelRefused, "a prerelease is never run against prod")
+	}
+	res := &Result{Manifest: m, KeyID: valid[0], KeyIDs: valid, ManifestSHA256: hex.EncodeToString(digest[:])}
+	if exp.Platform != "" {
+		var found []Artifact
+		for _, a := range m.Artifacts {
+			if a.Platform == exp.Platform {
+				found = append(found, a)
+			}
+		}
+		if len(found) != 1 {
+			return nil, fail(RulePlatformMissing, exp.Platform)
+		}
+		res.Artifact = found[0]
+	}
+	return res, nil
 }
 
-// parseManifest applies rule 5's schema and shape checks to the verified bytes.
-func parseManifest(b []byte) (*Manifest, error) {
+func parseSignatureFile(b []byte) ([]json.RawMessage, error) {
+	bad := fail(RuleSigFileInvalid, "")
+	if len(b) > MaxSignatureFileSize || !utf8.Valid(b) {
+		return nil, bad
+	}
 	obj, err := objectFields(b)
 	if err != nil {
-		return nil, fail(RuleManifestInvalid, "not a JSON object")
+		return nil, bad
+	}
+	if s, ok := stringField(obj, "schema"); !ok || s != SignatureSchema {
+		return nil, bad
+	}
+	raw, ok := obj["signatures"]
+	if !ok || len(raw) == 0 || raw[0] != '[' {
+		return nil, bad
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil || len(entries) < 1 || len(entries) > MaxSignatures {
+		return nil, bad
+	}
+	return entries, nil
+}
+
+// decodeBase64 is strict standard base64 (RFC 4648 §4): padded, no whitespace, canonical trailing bits, ≤ 256 chars.
+func decodeBase64(s string) ([]byte, bool) {
+	if len(s) == 0 || len(s) > 256 || len(s)%4 != 0 || !base64Re.MatchString(s) {
+		return nil, false
+	}
+	b, err := base64.StdEncoding.Strict().DecodeString(s)
+	return b, err == nil
+}
+
+// parseManifest checks the manifest shape (T/releases.ts KonectReleaseManifestSchema) on the verified bytes.
+func parseManifest(b []byte) (*Manifest, error) {
+	bad := func(field string) error { return fail(RuleManifestInvalid, field) }
+	if !utf8.Valid(b) { // Go's decoder would replace invalid UTF-8; the train's fatal TextDecoder refuses it
+		return nil, bad("not UTF-8")
+	}
+	obj, err := objectFields(b)
+	if err != nil {
+		return nil, bad("not a JSON object")
 	}
 	if s, ok := stringField(obj, "schema"); !ok || s != ManifestSchema {
-		return nil, fail(RuleManifestSchema, "")
+		return nil, bad("schema")
 	}
 	m := &Manifest{}
 	var ok bool
-	bad := func(field string) error { return fail(RuleManifestInvalid, field) }
-	if m.Version, ok = stringField(obj, "version"); !ok || !semverRe.MatchString(m.Version) {
+	if m.Version, ok = stringField(obj, "version"); !ok || !ValidVersion(m.Version) {
 		return nil, bad("version")
 	}
-	if m.Tag, ok = stringField(obj, "tag"); !ok {
+	if m.Tag, ok = stringField(obj, "tag"); !ok || utf16Len(m.Tag) > 65 {
 		return nil, bad("tag")
 	}
 	if m.Commit, ok = stringField(obj, "commit"); !ok || !commitRe.MatchString(m.Commit) {
 		return nil, bad("commit")
 	}
-	if m.Channel, ok = stringField(obj, "channel"); !ok {
+	if m.Channel, ok = stringField(obj, "channel"); !ok || (m.Channel != "release" && m.Channel != "prerelease") {
 		return nil, bad("channel")
 	}
-	if m.BuiltAt, ok = stringField(obj, "builtAt"); !ok {
-		return nil, bad("builtAt")
-	}
-	if _, err := time.Parse(time.RFC3339Nano, m.BuiltAt); err != nil || !strings.HasSuffix(m.BuiltAt, "Z") {
+	if m.BuiltAt, ok = stringField(obj, "builtAt"); !ok || !validDate(m.BuiltAt) {
 		return nil, bad("builtAt")
 	}
 	var list []json.RawMessage
-	if raw, has := obj["artifacts"]; !has || json.Unmarshal(raw, &list) != nil || len(list) != len(artifacts) {
+	if raw, has := obj["artifacts"]; !has || len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &list) != nil || len(list) != len(artifacts) {
 		return nil, bad("artifacts")
 	}
+	platforms := map[string]bool{}
 	for i, raw := range list {
 		a, err := parseArtifact(raw)
 		if err != nil {
 			return nil, bad(fmt.Sprintf("artifacts[%d]", i))
 		}
+		if platforms[a.Platform] {
+			return nil, bad("artifacts: one entry per platform")
+		}
+		platforms[a.Platform] = true
 		m.Artifacts = append(m.Artifacts, a)
 	}
 	if err := checkEmbedded(obj["embedded"]); err != nil {
 		return nil, bad("embedded")
 	}
+	if (m.Channel == "prerelease") != strings.Contains(m.Version, "-") {
+		return nil, bad("channel: prerelease exactly when the version has a pre-release part")
+	}
 	return m, nil
+}
+
+func validDate(s string) bool {
+	if !dateRe.MatchString(s) {
+		return false
+	}
+	layout := "2006-01-02T15:04Z07:00"
+	if strings.Count(s, ":") == 2 {
+		layout = time.RFC3339Nano
+	}
+	_, err := time.Parse(layout, s)
+	return err == nil
 }
 
 func parseArtifact(raw json.RawMessage) (Artifact, error) {
@@ -295,7 +358,7 @@ func parseArtifact(raw json.RawMessage) (Artifact, error) {
 	a.Encoding, ok[7] = stringField(f, "encoding")
 	for _, v := range ok {
 		if !v {
-			return a, errors.New("missing field")
+			return a, errors.New("missing or invalid field")
 		}
 	}
 	want, known := artifacts[a.Platform]
@@ -305,7 +368,7 @@ func parseArtifact(raw json.RawMessage) (Artifact, error) {
 	if !hex64Re.MatchString(a.SHA256) || !hex64Re.MatchString(a.ObjectSHA256) {
 		return a, errors.New("hash")
 	}
-	if a.Encoding != "gzip" || a.Object == "" {
+	if a.Encoding != "gzip" || a.Object != a.Name+".gz" {
 		return a, errors.New("object")
 	}
 	return a, nil
@@ -319,9 +382,15 @@ func checkEmbedded(raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	var templates []string
-	if t, ok := f["templates"]; !ok || json.Unmarshal(t, &templates) != nil || templates == nil {
+	var templates []json.RawMessage
+	if t, ok := f["templates"]; !ok || len(t) == 0 || t[0] != '[' || json.Unmarshal(t, &templates) != nil || len(templates) > 32 {
 		return errors.New("templates")
+	}
+	for _, t := range templates {
+		var s string
+		if len(t) == 0 || t[0] != '"' || json.Unmarshal(t, &s) != nil || s == "" || utf16Len(s) > 64 {
+			return errors.New("templates")
+		}
 	}
 	ca, ok := f["ca"]
 	if !ok {
@@ -332,16 +401,29 @@ func checkEmbedded(raw json.RawMessage) error {
 		return err
 	}
 	for k := range caf {
-		if v, ok := stringField(caf, k); !ok || !hex64Re.MatchString(v) {
+		if v, ok := stringField(caf, k); k == "" || utf16Len(k) > 64 || !ok || !hex64Re.MatchString(v) {
 			return errors.New("ca")
 		}
 	}
 	return nil
 }
 
-// objectFields parses one JSON object into its raw members. Keys are matched exactly (Go's struct decoding
-// is case-insensitive, JavaScript's is not), duplicate keys and trailing data are refused, so this parser
-// and JSON.parse never read two different values out of the same bytes.
+// utf16Len is JavaScript's string length.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= 0x10000 {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
+// objectFields parses one JSON object into its raw members. Keys are matched exactly (Go's struct decoding is
+// case-insensitive, JavaScript's is not); duplicate keys and trailing data are refused (JSON.parse would keep the last
+// duplicate; refusing is the safe side of that difference: a release job never writes one).
 func objectFields(raw []byte) (map[string]json.RawMessage, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	t, err := dec.Token()
@@ -391,20 +473,25 @@ func stringField(f map[string]json.RawMessage, k string) (string, bool) {
 	return s, true
 }
 
-// sizeField reads a positive integer no larger than MaxArtifactSize, written as plain digits.
+// sizeField reads a JSON number that is a positive integer no larger than MaxArtifactSize (as zod's
+// z.number().int().positive().max() does: 1e3 and 100.0 are integers).
 func sizeField(f map[string]json.RawMessage, k string) (int64, bool) {
 	raw, ok := f[k]
-	if !ok || len(raw) == 0 || len(raw) > 12 {
+	if !ok || len(raw) == 0 || (raw[0] != '-' && (raw[0] < '0' || raw[0] > '9')) {
 		return 0, false
 	}
-	for _, c := range raw {
-		if c < '0' || c > '9' {
-			return 0, false
+	var x float64
+	if json.Unmarshal(raw, &x) != nil || x != math.Trunc(x) || x <= 0 || x > float64(MaxArtifactSize) {
+		return 0, false
+	}
+	return int64(x), true
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
 		}
 	}
-	n, err := strconv.ParseInt(string(raw), 10, 64)
-	if err != nil || n <= 0 || n > MaxArtifactSize {
-		return 0, false
-	}
-	return n, true
+	return false
 }

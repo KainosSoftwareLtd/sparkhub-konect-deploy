@@ -1,11 +1,11 @@
 package bootstrap
 
 import (
-	"regexp"
 	"runtime"
 	"strings"
 
 	"github.com/KainosSoftwareLtd/sparkhub-konect-deploy/internal/token"
+	"github.com/KainosSoftwareLtd/sparkhub-konect-deploy/internal/verify"
 )
 
 // Environment variables (design #1702 §5.1).
@@ -20,9 +20,6 @@ const (
 
 	DefaultCache = "/data/.konect-bootstrap"
 )
-
-// versionRe: an exact version, X.Y.Z or X.Y.Z-<pre-release> (preprod only). No "latest", nothing path-like.
-var versionRe = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
 
 // Platform is this binary's platform in the manifest's naming ("" when the manifest has none for it).
 func Platform() string { return platformOf(runtime.GOOS, runtime.GOARCH) }
@@ -55,4 +52,6 @@ func KonectEnv(environ []string, bootstrapVersion, artifactSHA256 string) []stri
 }
 
 // ValidVersion reports whether v is an exact version KONECT_VERSION may hold.
-func ValidVersion(v string) bool { return versionRe.MatchString(v) }
+// It is the train's KONECT_VERSION_PATTERN: X.Y.Z or X.Y.Z-<pre-release> (preprod only), at most 64 characters; no
+// "latest", no "v", nothing path-like.
+func ValidVersion(v string) bool { return verify.ValidVersion(v) }

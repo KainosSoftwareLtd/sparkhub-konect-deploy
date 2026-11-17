@@ -435,7 +435,7 @@ func TestCommitRaceUsesTheirs(t *testing.T) {
 	if err := cache.WriteRelease(tmp, h.rel.Manifest, h.rel.Signature); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.Commit(tmp, testVersion, []verify.Key{h.signer.Key()}, verify.Expect{Version: testVersion, Prod: true, Platform: "linux-x64"})
+	got, err := c.Commit(tmp, testVersion, []verify.Key{h.signer.Key()}, verify.Expect{Version: testVersion, Environment: "prod", Platform: "linux-x64"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -539,12 +539,12 @@ func TestPlatformOf(t *testing.T) {
 
 func TestVersionPattern(t *testing.T) {
 	for _, v := range []string{"0.7.0", "1.10.3", "0.7.0-rc.1"} {
-		if !versionRe.MatchString(v) {
+		if !ValidVersion(v) {
 			t.Fatalf("%s refused", v)
 		}
 	}
 	for _, v := range []string{"latest", "v0.7.0", "0.7", "0.7.0/../../x", "../0.7.0", "0.7.0-", "07.0.0", ""} {
-		if versionRe.MatchString(v) {
+		if ValidVersion(v) {
 			t.Fatalf("%s accepted", v)
 		}
 	}

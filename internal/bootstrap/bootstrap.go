@@ -108,7 +108,11 @@ type Options struct {
 }
 
 func (o *Options) expect() verify.Expect {
-	return verify.Expect{Version: o.Version, Prod: o.Prod, Platform: o.Platform}
+	env := "preprod"
+	if o.Prod {
+		env = "prod"
+	}
+	return verify.Expect{Version: o.Version, Environment: env, Platform: o.Platform}
 }
 
 func (o *Options) request(cached string) resolve.Request {

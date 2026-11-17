@@ -80,7 +80,7 @@ func TestReleaseOK(t *testing.T) {
 	m := mustJSON(t, manifestMap("0.7.0"))
 	s := sigFile(t, map[string]any{"keyId": "konect-release-a", "sig": sign(t, priv, m)})
 	for _, p := range platforms {
-		r, err := Release(m, s, []Key{key}, Expect{Version: "0.7.0", Prod: true, Platform: p})
+		r, err := Release(m, s, []Key{key}, Expect{Version: "0.7.0", Environment: "prod", Platform: p})
 		if err != nil {
 			t.Fatalf("%s: %v", p, err)
 		}
@@ -96,7 +96,7 @@ func TestReleaseSignatureRules(t *testing.T) {
 	privX, _ := newKey(t, "attacker")
 	m := mustJSON(t, manifestMap("0.7.0"))
 	good := map[string]any{"keyId": "konect-release-a", "sig": sign(t, privA, m)}
-	exp := Expect{Version: "0.7.0", Prod: true, Platform: "linux-x64"}
+	exp := Expect{Version: "0.7.0", Environment: "prod", Platform: "linux-x64"}
 	keys := []Key{keyA, keyB}
 
 	cases := []struct {
@@ -104,18 +104,18 @@ func TestReleaseSignatureRules(t *testing.T) {
 		sig  []byte
 		want string
 	}{
-		{"not json", []byte("nope"), RuleSigInvalid},
-		{"json array", []byte(`[]`), RuleSigInvalid},
-		{"trailing data", append(sigFile(t, good), []byte(` {}`)...), RuleSigInvalid},
-		{"duplicate key", []byte(`{"schema":"konect-release-signature/1","schema":"x","signatures":[]}`), RuleSigInvalid},
-		{"schema missing", mustJSON(t, map[string]any{"signatures": []any{good}}), RuleSigSchema},
-		{"schema wrong", mustJSON(t, map[string]any{"schema": "konect-release-signature/2", "signatures": []any{good}}), RuleSigSchema},
-		{"schema case", []byte(`{"Schema":"konect-release-signature/1","signatures":[]}`), RuleSigSchema},
-		{"signatures missing", mustJSON(t, map[string]any{"schema": SignatureSchema}), RuleSigCount},
-		{"signatures null", []byte(`{"schema":"konect-release-signature/1","signatures":null}`), RuleSigCount},
-		{"signatures object", []byte(`{"schema":"konect-release-signature/1","signatures":{}}`), RuleSigCount},
-		{"signatures empty", sigFile(t), RuleSigCount},
-		{"five entries", sigFile(t, good, good, good, good, good), RuleSigCount},
+		{"not json", []byte("nope"), RuleSigFileInvalid},
+		{"json array", []byte(`[]`), RuleSigFileInvalid},
+		{"trailing data", append(sigFile(t, good), []byte(` {}`)...), RuleSigFileInvalid},
+		{"duplicate key", []byte(`{"schema":"konect-release-signature/1","schema":"x","signatures":[]}`), RuleSigFileInvalid},
+		{"schema missing", mustJSON(t, map[string]any{"signatures": []any{good}}), RuleSigFileInvalid},
+		{"schema wrong", mustJSON(t, map[string]any{"schema": "konect-release-signature/2", "signatures": []any{good}}), RuleSigFileInvalid},
+		{"schema case", []byte(`{"Schema":"konect-release-signature/1","signatures":[]}`), RuleSigFileInvalid},
+		{"signatures missing", mustJSON(t, map[string]any{"schema": SignatureSchema}), RuleSigFileInvalid},
+		{"signatures null", []byte(`{"schema":"konect-release-signature/1","signatures":null}`), RuleSigFileInvalid},
+		{"signatures object", []byte(`{"schema":"konect-release-signature/1","signatures":{}}`), RuleSigFileInvalid},
+		{"signatures empty", sigFile(t), RuleSigFileInvalid},
+		{"five entries", sigFile(t, good, good, good, good, good), RuleSigFileInvalid},
 		{"only unknown ids", sigFile(t, map[string]any{"keyId": "attacker", "sig": sign(t, privX, m)}), RuleSigNoneValid},
 		{"trusted id, wrong key", sigFile(t, map[string]any{"keyId": "konect-release-a", "sig": sign(t, privX, m)}), RuleSigNoneValid},
 		{"id of A, signed by B", sigFile(t, map[string]any{"keyId": "konect-release-a", "sig": sign(t, privB, m)}), RuleSigNoneValid},
@@ -146,7 +146,7 @@ func TestReleaseSignatureRules(t *testing.T) {
 		}
 	}
 	// No trusted keys at all: nothing verifies.
-	if got := RuleOf(func() error { _, err := Release(m, sigFile(t, good), nil, exp); return err }()); got != RuleSigNoneValid {
+	if got := RuleOf(func() error { _, err := Release(m, sigFile(t, good), nil, exp); return err }()); got != RuleKeysNotPinned {
 		t.Errorf("no keys: got %q", got)
 	}
 }
@@ -158,7 +158,7 @@ func TestReleaseManifestRules(t *testing.T) {
 		_, err := Release(m, s, []Key{key}, exp)
 		return err
 	}
-	prod := Expect{Version: "0.7.0", Prod: true, Platform: "linux-x64"}
+	prod := Expect{Version: "0.7.0", Environment: "prod", Platform: "linux-x64"}
 	mut := func(version string, f func(m map[string]any)) []byte {
 		m := manifestMap(version)
 		f(m)
@@ -174,7 +174,7 @@ func TestReleaseManifestRules(t *testing.T) {
 	}{
 		{"not json", []byte("{"), prod, RuleManifestInvalid},
 		{"duplicate key", []byte(`{"schema":"konect-release-manifest/1","version":"0.7.0","version":"0.5.0"}`), prod, RuleManifestInvalid},
-		{"schema", mut("0.7.0", func(m map[string]any) { m["schema"] = "konect-release-manifest/2" }), prod, RuleManifestSchema},
+		{"schema", mut("0.7.0", func(m map[string]any) { m["schema"] = "konect-release-manifest/2" }), prod, RuleManifestInvalid},
 		{"version not semver", mut("0.7.0", func(m map[string]any) { m["version"] = "latest" }), prod, RuleManifestInvalid},
 		{"commit", mut("0.7.0", func(m map[string]any) { m["commit"] = "abc" }), prod, RuleManifestInvalid},
 		{"builtAt", mut("0.7.0", func(m map[string]any) { m["builtAt"] = "yesterday" }), prod, RuleManifestInvalid},
@@ -190,19 +190,19 @@ func TestReleaseManifestRules(t *testing.T) {
 		{"embedded missing", mut("0.7.0", func(m map[string]any) { delete(m, "embedded") }), prod, RuleManifestInvalid},
 		{"version mismatch", mustJSON(t, manifestMap("0.6.0")), prod, RuleVersionMismatch},
 		{"tag mismatch", mut("0.7.0", func(m map[string]any) { m["tag"] = "v0.7.1" }), prod, RuleTagMismatch},
-		{"channel unknown", mut("0.7.0", func(m map[string]any) { m["channel"] = "beta" }), prod, RuleChannelInvalid},
-		{"rc labelled release", mut("0.7.0-rc.1", func(m map[string]any) { m["channel"] = "release" }), Expect{Version: "0.7.0-rc.1", Platform: "linux-x64"}, RuleChannelInvalid},
-		{"release labelled prerelease", mut("0.7.0", func(m map[string]any) { m["channel"] = "prerelease" }), Expect{Version: "0.7.0", Platform: "linux-x64"}, RuleChannelInvalid},
-		{"prerelease on prod", mustJSON(t, manifestMap("0.7.0-rc.1")), Expect{Version: "0.7.0-rc.1", Prod: true, Platform: "linux-x64"}, RuleChannelRefused},
-		{"platform missing", mut("0.7.0", func(m map[string]any) {
-			a := m["artifacts"].([]any)
-			a[0] = a[1]
-		}), prod, RulePlatformMissing},
+		{"channel unknown", mut("0.7.0", func(m map[string]any) { m["channel"] = "beta" }), prod, RuleManifestInvalid},
+		{"rc labelled release", mut("0.7.0-rc.1", func(m map[string]any) { m["channel"] = "release" }), Expect{Version: "0.7.0-rc.1", Environment: "preprod", Platform: "linux-x64"}, RuleManifestInvalid},
+		{"release labelled prerelease", mut("0.7.0", func(m map[string]any) { m["channel"] = "prerelease" }), Expect{Version: "0.7.0", Environment: "preprod", Platform: "linux-x64"}, RuleManifestInvalid},
+		{"prerelease on prod", mustJSON(t, manifestMap("0.7.0-rc.1")), Expect{Version: "0.7.0-rc.1", Environment: "prod", Platform: "linux-x64"}, RuleChannelRefused},
 		{"platform duplicate", mut("0.7.0", func(m map[string]any) {
 			a := m["artifacts"].([]any)
 			a[0] = a[1]
-		}), Expect{Version: "0.7.0", Prod: true, Platform: "linux-arm64"}, RulePlatformDuplicate},
-		{"platform not in contract", mustJSON(t, manifestMap("0.7.0")), Expect{Version: "0.7.0", Prod: true, Platform: "linux-riscv64"}, RulePlatformMissing},
+		}), prod, RuleManifestInvalid},
+		{"object not <name>.gz", mut("0.7.0", func(m map[string]any) { art(m, 0)["object"] = "other.gz" }), prod, RuleManifestInvalid},
+		{"request version", mustJSON(t, manifestMap("0.7.0")), Expect{Version: "latest", Environment: "prod", Platform: "linux-x64"}, RuleRequestInvalid},
+		{"request environment", mustJSON(t, manifestMap("0.7.0")), Expect{Version: "0.7.0", Environment: "staging", Platform: "linux-x64"}, RuleRequestInvalid},
+		{"manifest not UTF-8", append(mustJSON(t, manifestMap("0.7.0"))[:0:0], []byte("{\"schema\":\"\xff\"}")...), prod, RuleManifestInvalid},
+		{"platform not in contract", mustJSON(t, manifestMap("0.7.0")), Expect{Version: "0.7.0", Environment: "prod", Platform: "linux-riscv64"}, RulePlatformMissing},
 	}
 	for _, c := range cases {
 		if got := RuleOf(run(c.m, c.exp)); got != c.want {
@@ -214,7 +214,9 @@ func TestReleaseManifestRules(t *testing.T) {
 		m   []byte
 		exp Expect
 	}{
-		"prerelease on preprod": {mustJSON(t, manifestMap("0.7.0-rc.1")), Expect{Version: "0.7.0-rc.1", Platform: "linux-arm64"}},
+		"prerelease on preprod": {mustJSON(t, manifestMap("0.7.0-rc.1")), Expect{Version: "0.7.0-rc.1", Environment: "preprod", Platform: "linux-arm64"}},
+		"whole manifest":        {mustJSON(t, manifestMap("0.7.0")), Expect{Version: "0.7.0", Environment: "prod"}},
+		"integer as 1e3":        {mut("0.7.0", func(m map[string]any) { art(m, 0)["size"] = json.RawMessage("1e3") }), prod},
 		"unknown field ignored": {mut("0.7.0", func(m map[string]any) { m["future"] = map[string]any{"x": 1} }), prod},
 		// Exact key matching: "Version" is an unknown field, not a second "version".
 		"case variant ignored": {mut("0.7.0", func(m map[string]any) { m["Version"] = "0.5.0" }), prod},
@@ -230,7 +232,7 @@ func TestReleaseManifestRules(t *testing.T) {
 func TestErrorsNameTheRuleOnly(t *testing.T) {
 	_, key := newKey(t, "konect-release-a")
 	secret := "kit_acme.0123456789abcdef0123456789abcdef.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	_, err := Release([]byte(secret), []byte(fmt.Sprintf(`{"schema":%q}`, secret)), []Key{key}, Expect{Version: "0.7.0", Platform: "linux-x64"})
+	_, err := Release([]byte(secret), []byte(fmt.Sprintf(`{"schema":%q}`, secret)), []Key{key}, Expect{Version: "0.7.0", Environment: "prod", Platform: "linux-x64"})
 	if err == nil || strings.Contains(err.Error(), "kit_") {
 		t.Fatalf("error leaks bytes or is nil: %v", err)
 	}

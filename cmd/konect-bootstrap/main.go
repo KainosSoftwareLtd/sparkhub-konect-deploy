@@ -252,7 +252,7 @@ func cmdHealth(args []string) int {
 		return fatal(ex)
 	}
 	c := cache.Cache{Dir: cfg.cacheDir}
-	entry, err := c.Load(cfg.version, verify.TrustedKeys(), verify.Expect{Version: cfg.version, Prod: cfg.env == "prod", Platform: cfg.platform})
+	entry, err := c.Load(cfg.version, verify.TrustedKeys(), verify.Expect{Version: cfg.version, Environment: cfg.env, Platform: cfg.platform})
 	if err != nil {
 		return fatal(&bootstrap.Exit{Code: 1, Event: "health_cache", Err: err})
 	}
@@ -328,7 +328,7 @@ func cmdVerify(args []string) int {
 	if ex != nil {
 		return fatal(ex)
 	}
-	e, mm, err := cache.LoadDir(dir, *binary, keys, verify.Expect{Version: *ver, Prod: *env == "prod", Platform: *platform})
+	e, mm, err := cache.LoadDir(dir, *binary, keys, verify.Expect{Version: *ver, Environment: *env, Platform: *platform})
 	if mm != nil {
 		fmt.Fprintf(os.Stderr, "FAILED: %s (%s)\n", *binary, strings.TrimSuffix(strings.TrimPrefix(mm.Error(), "cached "), "; deleted"))
 		return 1

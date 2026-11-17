@@ -1,0 +1,923 @@
+{
+  "schema": "konect-release-fixtures/1",
+  "generator": "packages/sparkhub-workday-gateway/scripts/gen-konect-release-fixtures.ts",
+  "contract": "verifyKonectRelease in packages/sparkhub-workday-gateway/src/konect/releases.ts (#1702 design section 3.7)",
+  "warning": "TEST KEYS ONLY. These keys are public and must never be trusted by a real build.",
+  "usage": "For each case: trustedKeys = keys whose keyId is in trustedKeyIds (in that order); verify(cases/<dir>/manifest.json bytes, cases/<dir>/manifest.sig.json bytes, trustedKeys, expect) must give result. ok results name the verified keyIds (file order), the selected artifact name (null when platform is null) and the SHA-256 of the manifest bytes. objects/v<version>/<object> are the gzip objects the valid manifests describe.",
+  "keys": [
+    {
+      "keyId": "fixture-a",
+      "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEm3CVXtSnhz8zlo3dzWl94I1wmAwbDBnUYlg7fdFlf94XIAb/qTC8sxaJCAjk6sEn+1EsrLJ4xiXECGZivffBrA==",
+      "note": "P-256 test key (trusted in most cases)",
+      "fingerprint": "b2d18516e593af8575713e667615ceb6769df46d631dce3a73dd155aaa91bb3e"
+    },
+    {
+      "keyId": "fixture-b",
+      "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAETR3oIm+uZwrG7cCivrOA1704IYt42mXwmN2mcGrlazuJTpP0zOjblYf/aV8aoxOSEJFEDZmf6cLaSkE2Nef7Nw==",
+      "note": "P-256 test key (trusted in most cases)",
+      "fingerprint": "4e2af8b8efecd46ac1e02fb72057d3bd705cd86a799726e81f17b3908a2eea66"
+    },
+    {
+      "keyId": "fixture-untrusted",
+      "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEifLmyHx3xIJnJjHuViEvcgn5E0ZTepNrFP9FB+iPvV6Mr6Ifh+O/yWgGJiqYF2+/zFTNY2D8v/c+cqT/fw1s2g==",
+      "note": "P-256 test key, never trusted",
+      "fingerprint": "e2d46d12ec1a710a9a73d7b0fe0a634a858fb7a326fe5d956d035a3317ddd16d"
+    },
+    {
+      "keyId": "fixture-p384",
+      "spki": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEYdxhci4bZXqQZAaJNZhwVEbxLR171bjKbCx12zSsyew85lQNgFJvUuKoZgprONY3ZapM6LRXLPIypWN6Dte3siSZrqb2st7sWybpKAqimyxNBcmFENLvASzeGygPf+RN",
+      "note": "P-384: must be refused as a trusted key",
+      "fingerprint": "efcaaba1382c9802fb6da731b0194d6e82fdf4a5efd64c337cd81bb5c2ac6b08"
+    },
+    {
+      "keyId": "fixture-off-curve",
+      "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuR1z/WVz2VE85pOzRqGA7+ofwjs6NyYqV7AL5pUf/7mLM26z9WTptK36b/W5wbvUfXuCHQU4gB3J4pb9JKBr6w==",
+      "note": "P-256 SPKI, point not on the curve: must be refused",
+      "fingerprint": "7b2a22798ecd23230cec3b7743d3b4a0a0fef5da19059e6e2a46d4f99b3c0655"
+    }
+  ],
+  "cases": [
+    {
+      "name": "ok-release-linux-x64",
+      "description": "Signed by slot A, prod, linux-x64.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-a"
+        ],
+        "artifact": "konect-linux-x64",
+        "manifestSha256": "4cc5f3ed169756cbd188571b3ed4d2825c74f92bc655e6b2e9c4a72e22825246"
+      }
+    },
+    {
+      "name": "ok-release-linux-arm64",
+      "description": "Same manifest, the arm64 entry.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-arm64"
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-a"
+        ],
+        "artifact": "konect-linux-arm64",
+        "manifestSha256": "4cc5f3ed169756cbd188571b3ed4d2825c74f92bc655e6b2e9c4a72e22825246"
+      }
+    },
+    {
+      "name": "ok-release-node-preprod",
+      "description": "The node bundle on preprod.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "preprod",
+        "platform": "node"
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-a"
+        ],
+        "artifact": "konect.mjs",
+        "manifestSha256": "4cc5f3ed169756cbd188571b3ed4d2825c74f92bc655e6b2e9c4a72e22825246"
+      }
+    },
+    {
+      "name": "ok-whole-manifest",
+      "description": "platform null: the whole manifest (core import), no entry selected.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": null
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-a"
+        ],
+        "artifact": null,
+        "manifestSha256": "4cc5f3ed169756cbd188571b3ed4d2825c74f92bc655e6b2e9c4a72e22825246"
+      }
+    },
+    {
+      "name": "ok-two-slots",
+      "description": "A rotation release signed by A and B: both reported.",
+      "dir": "release-a-b",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-a",
+          "fixture-b"
+        ],
+        "artifact": "konect-linux-x64",
+        "manifestSha256": "4cc5f3ed169756cbd188571b3ed4d2825c74f92bc655e6b2e9c4a72e22825246"
+      }
+    },
+    {
+      "name": "ok-two-slots-only-b-trusted",
+      "description": "Signed by A and B, only B trusted (a newer verifier after A is retired).",
+      "dir": "release-a-b",
+      "trustedKeyIds": [
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-b"
+        ],
+        "artifact": "konect-linux-x64",
+        "manifestSha256": "4cc5f3ed169756cbd188571b3ed4d2825c74f92bc655e6b2e9c4a72e22825246"
+      }
+    },
+    {
+      "name": "ok-slot-b",
+      "description": "Signed by slot B only.",
+      "dir": "release-b",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-b"
+        ],
+        "artifact": "konect-linux-x64",
+        "manifestSha256": "4cc5f3ed169756cbd188571b3ed4d2825c74f92bc655e6b2e9c4a72e22825246"
+      }
+    },
+    {
+      "name": "ok-junk-entries-ignored",
+      "description": "Rule 4: an untrusted key, a number, a trusted id with bad base64, and an alg field are ignored; the valid A signature counts.",
+      "dir": "release-junk-entries",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-a"
+        ],
+        "artifact": "konect-linux-x64",
+        "manifestSha256": "4cc5f3ed169756cbd188571b3ed4d2825c74f92bc655e6b2e9c4a72e22825246"
+      }
+    },
+    {
+      "name": "ok-prerelease-preprod",
+      "description": "A prerelease on preprod.",
+      "dir": "prerelease-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0-rc.1",
+        "environment": "preprod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-a"
+        ],
+        "artifact": "konect-linux-x64",
+        "manifestSha256": "c28fc1f88b6aaa35699eac5f126a9181f1aee8136194d7632a5ed16ec2104c42"
+      }
+    },
+    {
+      "name": "ok-prerelease-dev",
+      "description": "A prerelease on dev.",
+      "dir": "prerelease-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0-rc.1",
+        "environment": "dev",
+        "platform": "macos-arm64"
+      },
+      "result": {
+        "ok": true,
+        "keyIds": [
+          "fixture-a"
+        ],
+        "artifact": "konect-macos-arm64",
+        "manifestSha256": "c28fc1f88b6aaa35699eac5f126a9181f1aee8136194d7632a5ed16ec2104c42"
+      }
+    },
+    {
+      "name": "no-trusted-keys",
+      "description": "Rule 1: no compiled-in key fails closed.",
+      "dir": "release-a",
+      "trustedKeyIds": [],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "keys_not_pinned"
+      }
+    },
+    {
+      "name": "trusted-key-wrong-curve",
+      "description": "Rule 1: a P-384 key is not a release key.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-p384"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "keys_invalid"
+      }
+    },
+    {
+      "name": "trusted-key-off-curve",
+      "description": "Rule 1: a P-256 SPKI whose point is not on the curve.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-off-curve"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "keys_invalid"
+      }
+    },
+    {
+      "name": "request-version-invalid",
+      "description": "Rule 2: the requested version is not X.Y.Z.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "request_invalid"
+      }
+    },
+    {
+      "name": "request-version-latest",
+      "description": "Rule 2: there is no \"latest\".",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "latest",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "request_invalid"
+      }
+    },
+    {
+      "name": "request-environment-unknown",
+      "description": "Rule 2: the environment is prod, preprod or dev.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "staging",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "request_invalid"
+      }
+    },
+    {
+      "name": "sig-schema-wrong",
+      "description": "Rule 3: schema is konect-release-signature/1.",
+      "dir": "sig-schema-wrong",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_file_invalid"
+      }
+    },
+    {
+      "name": "sig-not-json",
+      "description": "Rule 3: not JSON.",
+      "dir": "sig-not-json",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_file_invalid"
+      }
+    },
+    {
+      "name": "sig-bom",
+      "description": "Rule 3: a UTF-8 BOM is not JSON.",
+      "dir": "sig-bom",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_file_invalid"
+      }
+    },
+    {
+      "name": "sig-empty-list",
+      "description": "Rules 3–4: an empty list is a refusal.",
+      "dir": "sig-empty-list",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_file_invalid"
+      }
+    },
+    {
+      "name": "sig-not-a-list",
+      "description": "Rule 3: signatures is an array.",
+      "dir": "sig-not-a-list",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_file_invalid"
+      }
+    },
+    {
+      "name": "sig-five-entries",
+      "description": "Rule 3: at most 4 entries, even when one is valid.",
+      "dir": "sig-five-entries",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_file_invalid"
+      }
+    },
+    {
+      "name": "sig-file-too-large",
+      "description": "Rule 3: the signature file is at most 16384 bytes.",
+      "dir": "sig-file-too-large",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_file_invalid"
+      }
+    },
+    {
+      "name": "manifest-too-large",
+      "description": "Rule 3: the manifest is at most 65536 bytes, checked before the signature.",
+      "dir": "manifest-too-large",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "manifest_invalid"
+      }
+    },
+    {
+      "name": "sig-untrusted-only",
+      "description": "Rule 5: only an unknown key id.",
+      "dir": "sig-untrusted-only",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "sig-untrusted-claims-a",
+      "description": "Rule 5: an untrusted key signs under the id fixture-a.",
+      "dir": "sig-untrusted-claims-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "sig-signer-not-trusted",
+      "description": "Rule 5: signed by A, only B trusted.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "sig-bit-flipped",
+      "description": "Rule 5: one bit of s flipped.",
+      "dir": "sig-bit-flipped",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "sig-raw-r-s",
+      "description": "Rule 1: DER only; a raw r||s signature is refused.",
+      "dir": "sig-raw-r-s",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "sig-der-trailing-byte",
+      "description": "Strict DER: nothing after the SEQUENCE.",
+      "dir": "sig-der-trailing-byte",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "sig-der-long-form-length",
+      "description": "Strict DER: a short length in long form (BER) is refused.",
+      "dir": "sig-der-long-form-length",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "sig-der-int-not-minimal",
+      "description": "Strict DER: an INTEGER with a needless leading zero.",
+      "dir": "sig-der-int-not-minimal",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "sig-over-other-bytes",
+      "description": "Rule 5: a valid signature of another manifest (the rc).",
+      "dir": "sig-over-other-bytes",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "manifest-modified",
+      "description": "Rule 5: the exact bytes: one appended newline breaks the signature.",
+      "dir": "manifest-modified",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "manifest-reserialized",
+      "description": "Rule 5: never re-serialise: the same manifest pretty-printed.",
+      "dir": "manifest-reserialized",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "sig_none_valid"
+      }
+    },
+    {
+      "name": "manifest-not-json",
+      "description": "Rule 6: signed, but not JSON.",
+      "dir": "manifest-not-json",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "manifest_invalid"
+      }
+    },
+    {
+      "name": "manifest-bom",
+      "description": "Rule 6: signed, but starts with a UTF-8 BOM.",
+      "dir": "manifest-bom",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "manifest_invalid"
+      }
+    },
+    {
+      "name": "manifest-schema-wrong",
+      "description": "Rule 6: schema is konect-release-manifest/1.",
+      "dir": "manifest-schema-wrong",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "manifest_invalid"
+      }
+    },
+    {
+      "name": "manifest-five-artifacts",
+      "description": "Rule 6: exactly 6 artifacts.",
+      "dir": "manifest-five-artifacts",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "manifest_invalid"
+      }
+    },
+    {
+      "name": "manifest-duplicate-platform",
+      "description": "Rule 6: one entry per platform.",
+      "dir": "manifest-duplicate-platform",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "manifest_invalid"
+      }
+    },
+    {
+      "name": "manifest-name-platform-swapped",
+      "description": "Rule 6: each name belongs to its platform.",
+      "dir": "manifest-name-platform-swapped",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "manifest_invalid"
+      }
+    },
+    {
+      "name": "manifest-channel-inconsistent",
+      "description": "Rule 6: prerelease exactly when the version has a pre-release part.",
+      "dir": "manifest-channel-inconsistent",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "manifest_invalid"
+      }
+    },
+    {
+      "name": "version-mismatch",
+      "description": "Rule 6: a genuine 0.7.0 manifest when 0.7.1 was requested.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.1",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "version_mismatch"
+      }
+    },
+    {
+      "name": "version-replayed-old",
+      "description": "Rule 6: a genuine older (0.6.9) manifest served for 0.7.0.",
+      "dir": "old-release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "version_mismatch"
+      }
+    },
+    {
+      "name": "tag-mismatch",
+      "description": "Rule 6: tag is 'v' + version.",
+      "dir": "manifest-tag-mismatch",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "tag_mismatch"
+      }
+    },
+    {
+      "name": "channel-prerelease-on-prod",
+      "description": "Rule 6: prod refuses a prerelease.",
+      "dir": "prerelease-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0-rc.1",
+        "environment": "prod",
+        "platform": "linux-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "channel_refused"
+      }
+    },
+    {
+      "name": "platform-missing",
+      "description": "Rule 6: no entry for the platform.",
+      "dir": "release-a",
+      "trustedKeyIds": [
+        "fixture-a",
+        "fixture-b"
+      ],
+      "expect": {
+        "version": "0.7.0",
+        "environment": "prod",
+        "platform": "freebsd-x64"
+      },
+      "result": {
+        "ok": false,
+        "code": "platform_missing"
+      }
+    }
+  ]
+}

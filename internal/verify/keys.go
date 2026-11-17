@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -19,16 +20,19 @@ type Key struct {
 }
 
 // releaseKeys are the Konect release public keys (design #1702 §3.3): AWS KMS asymmetric keys in sparkhub-prod
-// (967880486164), ECC_NIST_P256, SIGN_VERIFY.
+// (967880486164), ECC_NIST_P256, SIGN_VERIFY. Each value is the base64 DER SubjectPublicKeyInfo that
+// `aws kms get-public-key --query PublicKey --output text` prints, the same string as the train's
+// KONECT_RELEASE_SIGNING_KEYS (T/releases.ts) and Konect's K/src/upgrade/release-keys.ts.
 //
 //   - konect-release-a: alias/konect-release-a (enabled, signs releases)
 //   - konect-release-b: alias/konect-release-b (created disabled; enabled only for a planned rotation or a compromise)
 //
-// Each PEM is the SubjectPublicKeyInfo that `aws kms get-public-key` returns. The same keys are compiled into Konect
-// (K/src/upgrade/release-keys.ts); B/'s fixture test checks a real signed release against them.
-var releaseKeys = []struct{ ID, PEM string }{
-	// PENDING Phase 0c: the keys are added here when the KMS slots exist. A release build refuses to publish a
-	// bootstrap that trusts no key (the release workflow checks `konect-bootstrap version --json`).
+// PENDING Phase 0c (2026-11-17): neither slot exists yet. A release build refuses to publish a bootstrap that trusts no
+// key (the release workflow checks `konect-bootstrap version --json`), and every verification fails closed
+// (keys_not_pinned) meanwhile.
+var releaseKeys = []struct{ ID, SPKI string }{
+	// {"konect-release-a", "<base64 SPKI>"},
+	// {"konect-release-b", "<base64 SPKI>"},
 }
 
 // extraKeys is empty in a release build. The e2e build tag (keys_e2e.go) adds a test key that only the e2e
@@ -38,16 +42,30 @@ var extraKeys []struct{ ID, PEM string }
 // TrustedKeys returns the compiled-in keys. It panics on a malformed compiled key: that is a build defect.
 func TrustedKeys() []Key {
 	var out []Key
-	for _, list := range [][]struct{ ID, PEM string }{releaseKeys, extraKeys} {
-		for _, k := range list {
-			key, err := ParseKeyPEM(k.ID, k.PEM)
-			if err != nil {
-				panic(fmt.Sprintf("compiled release key %s: %v", k.ID, err))
-			}
-			out = append(out, key)
+	for _, k := range releaseKeys {
+		key, err := ParseKeySPKI(k.ID, k.SPKI)
+		if err != nil {
+			panic(fmt.Sprintf("compiled release key %s: %v", k.ID, err))
 		}
+		out = append(out, key)
+	}
+	for _, k := range extraKeys {
+		key, err := ParseKeyPEM(k.ID, k.PEM)
+		if err != nil {
+			panic(fmt.Sprintf("e2e key %s: %v", k.ID, err))
+		}
+		out = append(out, key)
 	}
 	return out
+}
+
+// ParseKeySPKI reads a base64 DER SubjectPublicKeyInfo (what KMS returns) that must hold a P-256 ECDSA key.
+func ParseKeySPKI(id, b64 string) (Key, error) {
+	der, err := base64.StdEncoding.Strict().DecodeString(b64)
+	if err != nil {
+		return Key{}, err
+	}
+	return ParseKeyDER(id, der)
 }
 
 // ParseKeyPEM reads a PEM "PUBLIC KEY" (SubjectPublicKeyInfo) that must hold a P-256 ECDSA key.
