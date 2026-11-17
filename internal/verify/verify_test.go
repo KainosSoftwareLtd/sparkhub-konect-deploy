@@ -257,13 +257,19 @@ func TestParseKey(t *testing.T) {
 	}
 }
 
-// The compiled keys parse (TrustedKeys panics otherwise), with unique ids.
+// The compiled keys are exactly the two KMS release slots (Phase 0c), by fingerprint.
 func TestCompiledKeys(t *testing.T) {
-	seen := map[string]bool{}
-	for _, k := range TrustedKeys() {
-		if seen[k.ID] {
-			t.Fatalf("duplicate key id %s", k.ID)
+	want := map[string]string{
+		"konect-release-a": "02af6f46f192c214f92ed746d823125f9e418a128f5bf3ebbd326566423c13b2",
+		"konect-release-b": "8f263c1b3eecd8e97335e44b9ef4bbb8e65c296989af953a1726df1006f092b9",
+	}
+	keys := TrustedKeys()
+	if len(keys) != len(want) {
+		t.Fatalf("%d compiled keys, want %d", len(keys), len(want))
+	}
+	for _, k := range keys {
+		if Fingerprint(k) != want[k.ID] {
+			t.Fatalf("%s: fingerprint %s", k.ID, Fingerprint(k))
 		}
-		seen[k.ID] = true
 	}
 }
