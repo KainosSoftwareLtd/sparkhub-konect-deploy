@@ -75,7 +75,7 @@ jobs:
             if [ "$GITHUB_EVENT_NAME" = push ]; then echo "::error::no release key is compiled in (internal/verify/keys.go): this bootstrap could verify nothing"; exit 1; fi
             echo "::warning::dry run: no release key is compiled in yet"
           fi
-          jq -e '[.keys[].keyId] | all(startswith("konect-release-"))' keys.json >/dev/null || { echo "::error::a non-release key is compiled in"; exit 1; }
+          jq -e '[(.keys // [])[].keyId] | all(startswith("konect-release-"))' keys.json >/dev/null || { echo "::error::a non-release key is compiled in"; exit 1; }
           dist/konect-bootstrap-linux-x64 version
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         id: syft
