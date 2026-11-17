@@ -1,0 +1,17 @@
+# Konect on Kubernetes with the public bootstrap image (design #1702 §5). Two shapes:
+#   - SQLite: ONE replica with an RWO PersistentVolumeClaim on /data (deployment-sqlite.yaml, pvc.yaml);
+#   - Postgres: N replicas, no volume (deployment-postgres.yaml; the database URL is a Secret).
+# Pick one deployment in `resources`. Secrets: copy secret.example.yaml, fill it, never commit it.
+#
+#   kubectl apply -k k8s            # dry run: kubectl apply -k k8s --dry-run=server
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: konect
+resources:
+  - namespace.yaml
+  - service.yaml
+  - ingress.yaml
+  - pvc.yaml
+  - deployment-sqlite.yaml
+  # - deployment-postgres.yaml
+  # - secret.yaml                      # your copy of secret.example.yaml (or an external-secrets / sealed-secrets object)

@@ -1,0 +1,81 @@
+# Konect with Docker Compose (a VM, on-prem) and the public bootstrap image (design #1702 §5): SQLite on a named
+# volume, the local key half as a bind-mounted secret file, TLS at a reverse proxy in front (Caddy here; swap for
+# yours). At start the bootstrap gets the signed Konect release for KONECT_VERSION from SparkHub with the install
+# token, verifies it, caches it in the volume (/data/.konect-bootstrap) and execs it; Konect never sees the token.
+# Copy this file to your host, then:
+#
+#   (umask 077 && openssl rand -base64 32 > konect-local.key)                  # the local key half L: BACK IT UP apart from the volume
+#   sudo chown 65532:65532 konect-local.key && sudo chmod 400 konect-local.key # readable by the container user (uid 65532) and nobody else
+#   cp konect.env.example konect.env && chmod 600 konect.env                    # the deployment values (below)
+#   echo 'KONECT_BOOTSTRAP_IMAGE=ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:<digest from SparkHub → Konect → Install>' > .env
+#                                                                              # Compose reads the image from .env, not from konect.env
+#   docker compose -f compose.yml up -d
+#   open https://<KONECT_DOMAIN>/ and click Connect to SparkHub             # a Konect manager of your organization approves it in SparkHub
+#
+# konect.env (KEY=value lines; `konect init --container` prints Konect's list with explanations):
+#   KONECT_INSTALL_TOKEN=kit_<org>.<id>.<secret>     # SparkHub → Konect → Install (download only; revocable)
+#   KONECT_VERSION=0.7.0                             # exact; change it and `docker compose up -d` to upgrade
+#   KONECT_BASE_URL=https://konect.example.com
+#   # Optional, all five or none: none = a Konect manager configures sign-in in the UI after Connect (Settings → Sign-in)
+#   KONECT_IDP_ISSUER=https://login.microsoftonline.com/<tenant id>/v2.0
+#   KONECT_IDP_CLIENT_ID=…
+#   KONECT_IDP_CLIENT_SECRET=…
+#   KONECT_IDP_ALLOWED_GROUP=<group object id>
+#   KONECT_IDP_ADMIN_GROUP=<group object id>
+#   KONECT_SPARKHUB=prod                            # optional: prod | preprod (default prod)
+#   KONECT_DOMAIN=konect.example.com                 # for the Caddy site below
+#
+# The first start downloads about 35 MB; the health check allows 120 s for it (on a slow link the container may show
+# "unhealthy" once; nothing restarts it unless your restart policy is tied to health). Behind a TLS-inspecting proxy,
+# set HTTPS_PROXY and mount the proxy CA with SSL_CERT_FILE. Never mount the data volume into two running instances
+# (SQLite: one writer; the instance lease refuses the second).
+
+services:
+  konect:
+    image: ${KONECT_BOOTSTRAP_IMAGE:?set KONECT_BOOTSTRAP_IMAGE to the digest from SparkHub → Konect → Install}
+    restart: unless-stopped
+    env_file: [konect.env]
+    environment:
+      KONECT_CONFIG: builtin:sqlite
+      KONECT_LOCAL_KEY_FILE: /run/secrets/konect-local.key
+      # No KONECT_LOCAL_KEY_FILE_MOUNTED here: the file is yours, chown/chmod it as above and Konect checks it is owner-only.
+    secrets:
+      - source: konect-local.key
+        target: konect-local.key
+        uid: "65532"      # honoured by Swarm; plain `docker compose` bind-mounts the host file as is (hence the chown above)
+        gid: "65532"
+        mode: 0400
+    volumes:
+      - konect-data:/data   # Konect's dataDir is /data/konect (created 0700 by Konect); the admin socket lives there too
+    # Nothing but /data is written.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    expose: ["41800"]
+    healthcheck:
+      # The cached, verified Konect probes itself (distroless: no curl). A LOCKED instance is alive and healing.
+      test: ["CMD", "/usr/local/bin/konect-bootstrap", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+  # TLS in front (Let's Encrypt). Replace with your proxy; keep X-Forwarded-For (the config trusts ONE hop).
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    command: ["caddy", "reverse-proxy", "--from", "${KONECT_DOMAIN:?set KONECT_DOMAIN}", "--to", "konect:41800"]
+    volumes:
+      - caddy-data:/data
+    depends_on:
+      konect:
+        condition: service_healthy
+
+secrets:
+  konect-local.key:
+    file: ./konect-local.key
+
+volumes:
+  konect-data:
+  caddy-data:
