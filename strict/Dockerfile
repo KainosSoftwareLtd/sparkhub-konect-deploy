@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1.10
+# check=skip=SecretsUsedInArgOrEnv
 #
 # Strict path (design #1702 §6): build your own Konect image at BUILD time, so nothing is downloaded when it starts
 # and the image you scan is the image you run. The release signature and hashes are checked by the bootstrap during

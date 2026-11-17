@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1.10
+# check=skip=SecretsUsedInArgOrEnv
 #
 # The Konect bootstrap image (design #1702 §5.3): ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap.
 # It holds no Konect code. At start the bootstrap asks SparkHub for the pinned KONECT_VERSION, verifies the

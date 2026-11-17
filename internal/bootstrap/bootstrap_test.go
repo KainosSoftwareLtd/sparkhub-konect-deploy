@@ -120,7 +120,9 @@ func exitCode(err error) int {
 }
 
 func refusal(status int, code string) func(resolve.Request) (*resolve.Answer, error) {
-	return func(resolve.Request) (*resolve.Answer, error) { return nil, &resolve.Refusal{Status: status, Code: code} }
+	return func(resolve.Request) (*resolve.Answer, error) {
+		return nil, &resolve.Refusal{Status: status, Code: code}
+	}
 }
 
 func transient(status int) func(resolve.Request) (*resolve.Answer, error) {

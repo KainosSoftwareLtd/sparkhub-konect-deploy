@@ -619,13 +619,13 @@ func TestNoexecCacheUsesMemfd(t *testing.T) {
 func TestConfigErrors(t *testing.T) {
 	s := newStub(t)
 	for name, env := range map[string]map[string]string{
-		"no token":          {"KONECT_INSTALL_TOKEN": ""},
-		"bad token":         {"KONECT_INSTALL_TOKEN": "kit_nope"},
-		"latest":            {"KONECT_VERSION": "latest"},
-		"no version":        {"KONECT_VERSION": ""},
-		"dev sparkhub":      {"KONECT_SPARKHUB": "dev"},
-		"relative cache":    {"KONECT_BOOTSTRAP_CACHE": "cache"},
-		"unwritable cache":  {"KONECT_BOOTSTRAP_CACHE": "/proc/konect-cache"},
+		"no token":         {"KONECT_INSTALL_TOKEN": ""},
+		"bad token":        {"KONECT_INSTALL_TOKEN": "kit_nope"},
+		"latest":           {"KONECT_VERSION": "latest"},
+		"no version":       {"KONECT_VERSION": ""},
+		"dev sparkhub":     {"KONECT_SPARKHUB": "dev"},
+		"relative cache":   {"KONECT_BOOTSTRAP_CACHE": "cache"},
+		"unwritable cache": {"KONECT_BOOTSTRAP_CACHE": "/proc/konect-cache"},
 	} {
 		r := newRunner(t, s)
 		for k, v := range env {
