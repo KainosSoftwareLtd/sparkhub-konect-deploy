@@ -1,0 +1,524 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  SparkHub Konect on ECS Fargate (ARM64) behind an ALB, RDS PostgreSQL with an RDS-managed password that Konect reads
+  itself, and a KMS key that wraps Konect's local key half. Deploy with scripts/aws.sh (needs CAPABILITY_IAM).
+
+# Source of truth for AWS. scripts/aws.sh runs `aws cloudformation deploy` on this file; the template must stay under
+# 51,200 bytes (the inline template limit of `deploy` without an S3 bucket).
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Konect }
+        Parameters: [KonectVersion, ImageKind, Image, InstallToken, SparkHub]
+      - Label: { default: Network and TLS }
+        Parameters: [VpcId, AlbSubnetIds, TaskSubnetIds, AssignPublicIp, DbSubnetIds, DomainName, CertificateArn, HostedZoneId]
+      - Label: { default: Sizes }
+        Parameters: [DbInstanceClass, TaskCpu, TaskMemory]
+      - Label: { default: Account policies }
+        Parameters: [PermissionsBoundaryArn, CreateEcsServiceLinkedRole]
+      - Label: { default: Restore only }
+        Parameters: [DbSnapshotIdentifier, ExistingKmsKeyArn]
+
+Parameters:
+  KonectVersion:
+    Type: String
+    Description: The Konect version to run, exactly X.Y.Z (X.Y.Z-rc.N against SparkHub preprod only). Update the stack with a new value to upgrade or roll back.
+    AllowedPattern: '^\d+\.\d+\.\d+(-rc\.\d+)?$'
+    ConstraintDescription: X.Y.Z or X.Y.Z-rc.N, for example 0.7.0 (no v, no latest)
+  ImageKind:
+    Type: String
+    Default: bootstrap
+    AllowedValues: [bootstrap, strict]
+    Description: bootstrap downloads and verifies Konect at start with the install token. strict is your own image built with strict/Dockerfile; no token is stored.
+  Image:
+    Type: String
+    MinLength: 1
+    Description: Container image pinned by digest (multi-arch, arm64). The bootstrap image of this template release, or your strict image.
+  InstallToken:
+    Type: String
+    NoEcho: true
+    Default: ""
+    AllowedPattern: '^(kit_.*)?$'
+    ConstraintDescription: an install token starts with kit_
+    Description: The install token from SparkHub (Konect, Install). Required with ImageKind bootstrap. Stored in a Secrets Manager secret this stack creates.
+  SparkHub:
+    Type: String
+    Default: prod
+    AllowedValues: [prod, preprod]
+    Description: Which SparkHub this Konect belongs to.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: The VPC.
+  AlbSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Two public subnets in different Availability Zones for the load balancer.
+  TaskSubnetIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: Subnets of the task. Empty means the load balancer subnets.
+  AssignPublicIp:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: DISABLED needs a NAT gateway (the task reaches SparkHub, ghcr.io, S3, KMS and Secrets Manager).
+  DbSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets of the database in two Availability Zones (private recommended).
+  DomainName:
+    Type: String
+    MinLength: 1
+    AllowedPattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+    ConstraintDescription: a lowercase host name such as konect.example.com
+    Description: The public host name of the instance (an ALB has no TLS host of its own).
+  CertificateArn:
+    Type: String
+    AllowedPattern: '^arn:aws[a-z-]*:acm:[a-z0-9-]+:\d{12}:certificate/[A-Za-z0-9-]+$'
+    ConstraintDescription: an ACM certificate ARN in this region
+    Description: ACM certificate for DomainName, in this region.
+  HostedZoneId:
+    Type: String
+    Default: ""
+    Description: Optional Route 53 hosted zone of DomainName; the stack then creates the alias record. Empty means you point DNS at the AlbDnsName output.
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    Description: RDS instance class.
+  TaskCpu:
+    Type: String
+    Default: "512"
+    AllowedValues: ["256", "512", "1024", "2048", "4096"]
+    Description: Fargate CPU units.
+  TaskMemory:
+    Type: String
+    Default: "1024"
+    Description: Fargate memory in MiB (valid for TaskCpu; 1024 holds the bootstrap's download).
+  PermissionsBoundaryArn:
+    Type: String
+    Default: ""
+    Description: Optional permissions boundary set on both roles this stack creates.
+  CreateEcsServiceLinkedRole:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: true in an account that never ran ECS (no AWSServiceRoleForECS yet).
+  DbSnapshotIdentifier:
+    Type: String
+    Default: ""
+    Description: Restore only. The DB snapshot to restore the database from. Needs ExistingKmsKeyArn (restore = same key + same database).
+  ExistingKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: Restore only. The old stack's KmsKeyArn. No key is created; the task role is granted on this key (its key policy must name the new task role, see aws/README.md).
+
+Rules:
+  TokenWithBootstrap:
+    RuleCondition: !Equals [!Ref ImageKind, bootstrap]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref InstallToken, ""]]
+        AssertDescription: InstallToken is required with ImageKind bootstrap (SparkHub, Konect, Install, Create token).
+  RestoreNeedsTheOldKey:
+    RuleCondition: !Not [!Equals [!Ref DbSnapshotIdentifier, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref ExistingKmsKeyArn, ""]]
+        AssertDescription: A restore from DbSnapshotIdentifier needs ExistingKmsKeyArn, the old key (without it the data cannot be read).
+
+Conditions:
+  IsBootstrap: !Equals [!Ref ImageKind, bootstrap]
+  CreateKey: !Equals [!Ref ExistingKmsKeyArn, ""]
+  RestoreDb: !Not [!Equals [!Ref DbSnapshotIdentifier, ""]]
+  HasHostedZone: !Not [!Equals [!Ref HostedZoneId, ""]]
+  HasBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+  CreateSlr: !Equals [!Ref CreateEcsServiceLinkedRole, "true"]
+  TasksInAlbSubnets: !Equals [!Join [",", !Ref TaskSubnetIds], ""]
+
+Resources:
+  # ── Key that wraps L ───────────────────────────────────────────────────────
+  # Retained on delete and replace: losing the key loses the store, even with a DB snapshot.
+  KmsKey:
+    Type: AWS::KMS::Key
+    Condition: CreateKey
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub Konect ${AWS::StackName} local key half (L)
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: KeyAdministration
+            Effect: Allow
+            Principal: { AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root" }
+            Action: kms:*
+            Resource: "*"
+          # The task role by condition, not as a principal: KMS does not reject the policy while the new role
+          # propagates. The role's own policy grants the same, with the same encryption context.
+          - Sid: KonectLocalHalf
+            Effect: Allow
+            Principal: { AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root" }
+            Action: [kms:Encrypt, kms:Decrypt]
+            Resource: "*"
+            Condition:
+              ArnEquals: { aws:PrincipalArn: !GetAtt TaskRole.Arn }
+              StringEquals: { kms:EncryptionContext:app: konect, kms:EncryptionContext:purpose: local-half }
+      Tags:
+        - { Key: app, Value: konect }
+
+  KmsAlias:
+    Type: AWS::KMS::Alias
+    Condition: CreateKey
+    Properties:
+      AliasName: !Sub alias/${AWS::StackName}-local-half
+      TargetKeyId: !Ref KmsKey
+
+  # ── Install token (bootstrap only; strict holds no SparkHub credential) ────
+  InstallTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: IsBootstrap
+    Metadata:
+      cfn-lint:
+        config:
+          # The rule TokenWithBootstrap makes InstallToken non-empty whenever this secret exists.
+          ignore_checks: [W1030]
+    Properties:
+      Description: !Sub Konect ${AWS::StackName} install token (download only)
+      SecretString: !Ref InstallToken
+      Tags:
+        - { Key: app, Value: konect }
+
+  # ── Network ────────────────────────────────────────────────────────────────
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Konect load balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: redirect to HTTPS }
+      Tags:
+        - { Key: app, Value: konect }
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Konect task
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 41800, ToPort: 41800, SourceSecurityGroupId: !Ref AlbSecurityGroup, Description: from the load balancer }
+      Tags:
+        - { Key: app, Value: konect }
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Konect database
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 5432, ToPort: 5432, SourceSecurityGroupId: !Ref TaskSecurityGroup, Description: from the task }
+      Tags:
+        - { Key: app, Value: konect }
+
+  # ── Database ───────────────────────────────────────────────────────────────
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub Konect ${AWS::StackName}
+      SubnetIds: !Ref DbSubnetIds
+      Tags:
+        - { Key: app, Value: konect }
+
+  # RDS manages the master password in Secrets Manager and rotates it; Konect reads it itself (KONECT_PG_SECRET_ARN),
+  # so a rotation never breaks it and the password is never in the task's environment.
+  Db:
+    Type: AWS::RDS::DBInstance
+    Metadata:
+      cfn-lint:
+        config:
+          # cfn-lint lists the bare major "16" as deprecated; RDS resolves it to the current 16.x minor (16.13 on
+          # 2026-11-16), which stays creatable, unlike a pinned minor once it is retired.
+          ignore_checks: [W3691]
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: postgres
+      EngineVersion: "16"
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: "20"
+      StorageType: gp3
+      StorageEncrypted: true
+      DBSnapshotIdentifier: !If [RestoreDb, !Ref DbSnapshotIdentifier, !Ref AWS::NoValue]
+      MasterUsername: !If [RestoreDb, !Ref AWS::NoValue, konect]
+      DBName: !If [RestoreDb, !Ref AWS::NoValue, konect]
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups: [!Ref DbSecurityGroup]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+      CopyTagsToSnapshot: true
+      DeletionProtection: true
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - { Key: app, Value: konect }
+
+  # ── IAM ────────────────────────────────────────────────────────────────────
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
+      Policies: !If
+        - IsBootstrap
+        - - PolicyName: read-install-token
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref InstallTokenSecret
+        - !Ref AWS::NoValue
+      Tags:
+        - { Key: app, Value: konect }
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
+      Tags:
+        - { Key: app, Value: konect }
+
+  # A policy of its own: the key policy names the role and this policy names the key (no circular dependency).
+  TaskRolePolicy:
+    Type: AWS::IAM::RolePolicy
+    Properties:
+      RoleName: !Ref TaskRole
+      PolicyName: konect-task
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LocalHalf
+            Effect: Allow
+            Action: [kms:Encrypt, kms:Decrypt]
+            Resource: !If [CreateKey, !GetAtt KmsKey.Arn, !Ref ExistingKmsKeyArn]
+            Condition:
+              StringEquals: { kms:EncryptionContext:app: konect, kms:EncryptionContext:purpose: local-half }
+          - Sid: DatabasePassword
+            Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !GetAtt Db.MasterUserSecret.SecretArn
+
+  EcsServiceLinkedRole:
+    Type: AWS::IAM::ServiceLinkedRole
+    Condition: CreateSlr
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AWSServiceName: ecs.amazonaws.com
+
+  # DependsOn cannot name a resource whose condition is false; this handle depends on the role only when it exists.
+  EcsServiceLinkedRoleReady:
+    Type: AWS::CloudFormation::WaitConditionHandle
+    Metadata:
+      ServiceLinkedRole: !If [CreateSlr, !Ref EcsServiceLinkedRole, none]
+
+  # ── ECS ────────────────────────────────────────────────────────────────────
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /konect/${AWS::StackName}
+      RetentionInDays: 30
+      Tags:
+        - { Key: app, Value: konect }
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    DependsOn: EcsServiceLinkedRoleReady
+    Properties:
+      Tags:
+        - { Key: app, Value: konect }
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref AWS::StackName
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      RuntimePlatform: { CpuArchitecture: ARM64, OperatingSystemFamily: LINUX }
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      # Task storage: the bootstrap's cache and Konect's runtime directory. Lost with the task (Postgres holds the data).
+      Volumes:
+        - Name: data
+      ContainerDefinitions:
+        - Name: konect
+          Image: !Ref Image
+          Essential: true
+          ReadonlyRootFilesystem: true
+          PortMappings:
+            - { ContainerPort: 41800, Protocol: tcp }
+          MountPoints:
+            - { SourceVolume: data, ContainerPath: /data, ReadOnly: false }
+          Environment:
+            - { Name: KONECT_VERSION, Value: !Ref KonectVersion }
+            - { Name: KONECT_SPARKHUB, Value: !Ref SparkHub }
+            - { Name: KONECT_CONFIG, Value: builtin:postgres-aws }
+            - { Name: KONECT_BASE_URL, Value: !Sub "https://${DomainName}" }
+            - { Name: KONECT_AWS_KMS_KEY_ID, Value: !If [CreateKey, !Ref KmsAlias, !Ref ExistingKmsKeyArn] }
+            - { Name: AWS_REGION, Value: !Ref AWS::Region }
+            - { Name: KONECT_PG_HOST, Value: !GetAtt Db.Endpoint.Address }
+            - { Name: KONECT_PG_SECRET_ARN, Value: !GetAtt Db.MasterUserSecret.SecretArn }
+            - { Name: KONECT_STORE_OPEN_RETRY_SECONDS, Value: "60" }
+          Secrets: !If
+            - IsBootstrap
+            - - { Name: KONECT_INSTALL_TOKEN, ValueFrom: !Ref InstallTokenSecret }
+            - !Ref AWS::NoValue
+          # No container health check: the ALB's /v1/health is the check (a command differs between bootstrap and strict).
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: konect
+      Tags:
+        - { Key: app, Value: konect }
+
+  # ── Load balancer ──────────────────────────────────────────────────────────
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Ref AlbSubnetIds
+      SecurityGroups: [!Ref AlbSecurityGroup]
+      LoadBalancerAttributes:
+        - { Key: routing.http.drop_invalid_header_fields.enabled, Value: "true" }
+      Tags:
+        - { Key: app, Value: konect }
+
+  # /v1/health answers 200 while locked: a locked task is alive and healing, and must not be replaced.
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 41800
+      TargetType: ip
+      HealthCheckPath: /v1/health
+      HealthCheckIntervalSeconds: 15
+      Matcher: { HttpCode: "200" }
+      TargetGroupAttributes:
+        # One task: the default 300 s would hold two tasks for 5 minutes on every update.
+        - { Key: deregistration_delay.timeout_seconds, Value: "30" }
+      Tags:
+        - { Key: app, Value: konect }
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig: { Protocol: HTTPS, Port: "443", StatusCode: HTTP_301 }
+
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasHostedZone
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+
+  # ── Service ────────────────────────────────────────────────────────────────
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [HttpsListener, TaskRolePolicy]
+    Properties:
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: 1
+      # Covers the bootstrap's first download and the store open.
+      HealthCheckGracePeriodSeconds: 300
+      DeploymentConfiguration:
+        # A rolling update starts the new task before stopping the old one (Postgres allows two processes).
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        # A version that cannot start rolls back to the last working task definition after 3 failed tasks.
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: !Ref AssignPublicIp
+          SecurityGroups: [!Ref TaskSecurityGroup]
+          Subnets: !If [TasksInAlbSubnets, !Ref AlbSubnetIds, !Ref TaskSubnetIds]
+      LoadBalancers:
+        - { ContainerName: konect, ContainerPort: 41800, TargetGroupArn: !Ref TargetGroup }
+      Tags:
+        - { Key: app, Value: konect }
+
+# Never the install token: NoEcho masks describe calls only, not Outputs or Metadata.
+Outputs:
+  Url:
+    Description: The instance URL.
+    Value: !Sub https://${DomainName}
+  AlbDnsName:
+    Description: The load balancer's DNS name (point DomainName here when there is no HostedZoneId).
+    Value: !GetAtt LoadBalancer.DNSName
+  KmsKeyArn:
+    Description: The key that wraps L (ExistingKmsKeyArn of a restore). Retained when the stack is deleted.
+    Value: !If [CreateKey, !GetAtt KmsKey.Arn, !Ref ExistingKmsKeyArn]
+  TaskRoleArn:
+    Description: The task role (a restore's old key policy must name the new one).
+    Value: !GetAtt TaskRole.Arn
+  DbSecretArn:
+    Description: The RDS-managed master user secret Konect reads.
+    Value: !GetAtt Db.MasterUserSecret.SecretArn
+  DbInstanceId:
+    Description: The RDS instance (snapshots for a restore).
+    Value: !Ref Db
+  LogGroup:
+    Description: CloudWatch log group of the task.
+    Value: !Ref LogGroup
+  NextStep:
+    Description: What to do next.
+    Value: !If
+      - HasHostedZone
+      - !Sub Open https://${DomainName} and click Connect to SparkHub; a Konect manager approves it in SparkHub.
+      - !Sub Point ${DomainName} at ${LoadBalancer.DNSName} (CNAME or alias), then open https://${DomainName} and click Connect to SparkHub; a Konect manager approves it in SparkHub.

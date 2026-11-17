@@ -1,0 +1,49 @@
+name: templates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  azure:
+    name: Bicep build check and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The Bicep version recorded in the committed azuredeploy.json, so the build check compares like with like.
+      - name: Install Bicep
+        run: |
+          v=$(jq -r '.metadata._generator.version' azure/azuredeploy.json | cut -d. -f1-3)
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL -o "$RUNNER_TEMP/bin/bicep" "https://github.com/Azure/bicep/releases/download/v$v/bicep-linux-x64"
+          chmod +x "$RUNNER_TEMP/bin/bicep"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: azuredeploy.json is built from main.bicep
+        run: scripts/build-azure.sh --check
+      - name: bicep lint (warnings fail too)
+        run: |
+          bicep lint azure/main.bicep 2>&1 | tee lint.txt
+          if grep -Eq ': (Warning|Error) ' lint.txt; then exit 1; fi
+
+  aws:
+    name: cfn-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pipx install cfn-lint==1.60.1
+      - run: cfn-lint aws/konect.yaml
+      - name: Fits aws cloudformation deploy without an S3 bucket (51,200 bytes)
+        run: test "$(wc -c <aws/konect.yaml)" -le 51200
+
+  shell:
+    name: shellcheck and wrapper tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pipx install shellcheck-py==0.11.0.1
+      - run: shellcheck -x scripts/*.sh tests/*.sh
+      - run: tests/wrappers.sh
