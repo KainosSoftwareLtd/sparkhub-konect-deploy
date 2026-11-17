@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "12590667506429078282"
+      "templateHash": "17954573305592120083"
     },
     "description": "SparkHub Konect on Azure Container Apps, PostgreSQL Flexible Server (Entra sign-in with the managed identity) and a Key Vault key. Takes about 20 minutes, most of it the Container Apps environment."
   },
@@ -50,6 +50,13 @@
       "defaultValue": "ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:bbd47e455e4463aa013052bf47409bee9e99ec418c5314607565328dcf9b4903",
       "metadata": {
         "description": "Container image, pinned by digest. Default: the bootstrap image this template release was tested with. strict: your image (for example myregistry.azurecr.io/konect@sha256:...)."
+      }
+    },
+    "registryId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Private registry only: the resource ID of the Azure Container Registry that holds image (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ContainerRegistry/registries/<name>). The managed identity pulls from it; createRoleAssignments=true grants it AcrPull on the registry. Empty: a public image (the default bootstrap image needs none)."
       }
     },
     "installToken": {
@@ -157,7 +164,9 @@
     "versionRcOk": "[or(equals(length(variables('versionSplit')), 1), and(and(and(equals(length(variables('versionSplit')), 2), startsWith(variables('versionRc'), 'rc.')), greater(length(variables('versionRc')), 3)), empty(filter(range(3, max(sub(length(variables('versionRc')), 3), 0)), lambda('i', not(contains('0123456789', substring(variables('versionRc'), lambdaVariables('i'), 1))))))))]",
     "keyIdParts": "[split(parameters('existingKeyId'), '/')]",
     "keyIdOk": "[if(empty(parameters('existingKeyId')), true(), if(equals(length(variables('keyIdParts')), 11), and(equals(toLower(join(take(skip(variables('keyIdParts'), 5), 3), '/')), 'providers/microsoft.keyvault/vaults'), equals(toLower(variables('keyIdParts')[9]), 'keys')), false()))]",
-    "inputError": "[if(not(variables('nameOk')), 'name must be lowercase letters, digits or hyphens, starting with a letter', if(or(not(variables('versionCoreOk')), not(variables('versionRcOk'))), 'konectVersion must be X.Y.Z or X.Y.Z-rc.N, for example 0.7.0 (no v, no latest)', if(and(equals(parameters('imageKind'), 'bootstrap'), empty(parameters('installToken'))), 'installToken is required with imageKind bootstrap (SparkHub, Konect, Install, Create token)', if(and(not(empty(parameters('installToken'))), not(startsWith(parameters('installToken'), 'kit_'))), 'installToken must start with kit_', if(empty(parameters('image')), 'image is required (the bootstrap image pinned by digest, or your strict image)', if(not(variables('keyIdOk')), 'existingKeyId must be a key resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/keys/<key>', ''))))))]",
+    "registryParts": "[split(parameters('registryId'), '/')]",
+    "registryOk": "[if(empty(parameters('registryId')), true(), if(equals(length(variables('registryParts')), 9), equals(toLower(join(take(skip(variables('registryParts'), 5), 3), '/')), 'providers/microsoft.containerregistry/registries'), false()))]",
+    "inputError": "[if(not(variables('nameOk')), 'name must be lowercase letters, digits or hyphens, starting with a letter', if(or(not(variables('versionCoreOk')), not(variables('versionRcOk'))), 'konectVersion must be X.Y.Z or X.Y.Z-rc.N, for example 0.7.0 (no v, no latest)', if(and(equals(parameters('imageKind'), 'bootstrap'), empty(parameters('installToken'))), 'installToken is required with imageKind bootstrap (SparkHub, Konect, Install, Create token)', if(and(not(empty(parameters('installToken'))), not(startsWith(parameters('installToken'), 'kit_'))), 'installToken must start with kit_', if(empty(parameters('image')), 'image is required (the bootstrap image pinned by digest, or your strict image)', if(not(variables('keyIdOk')), 'existingKeyId must be a key resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/keys/<key>', if(not(variables('registryOk')), 'registryId must be a container registry resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ContainerRegistry/registries/<name>', '')))))))]",
     "checkedVersion": "[if(empty(variables('inputError')), parameters('konectVersion'), string(json('{}')[variables('inputError')]))]",
     "suffix": "[uniqueString(resourceGroup().id, parameters('name'))]",
     "bootstrap": "[equals(parameters('imageKind'), 'bootstrap')]",
@@ -171,6 +180,9 @@
     "keyResourceId": "[resourceId(variables('keySubscription'), variables('keyResourceGroup'), 'Microsoft.KeyVault/vaults/keys', variables('keyVaultName'), variables('keyName'))]",
     "keyUri": "[format('https://{0}{1}/keys/{2}', variables('keyVaultName'), environment().suffixes.keyvaultDns, variables('keyName'))]",
     "cryptoServiceEncryptionUser": "e147488a-f6f5-4113-8e2d-b22465e65bf6",
+    "useRegistry": "[not(empty(parameters('registryId')))]",
+    "registryName": "[if(and(variables('useRegistry'), variables('registryOk')), variables('registryParts')[8], '')]",
+    "registryServer": "[format('{0}{1}', variables('registryName'), environment().suffixes.acrLoginServer)]",
     "tags": {
       "app": "konect"
     },
@@ -349,6 +361,7 @@
         "configuration": {
           "activeRevisionsMode": "Single",
           "secrets": "[if(variables('bootstrap'), createArray(createObject('name', 'install-token', 'value', parameters('installToken'))), createArray())]",
+          "registries": "[if(variables('useRegistry'), createArray(createObject('server', variables('registryServer'), 'identity', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name'))))), createArray())]",
           "ingress": {
             "external": true,
             "targetPort": 41800,
@@ -413,7 +426,8 @@
         "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('name')))]",
         "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/firewallRules', variables('serverName'), 'AllowAllAzureServicesAndResourcesWithinAzureIps')]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('konect-pg-admin-{0}', variables('suffix')))]"
+        "[resourceId('Microsoft.Resources/deployments', format('konect-pg-admin-{0}', variables('suffix')))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', if(variables('useRegistry'), variables('registryParts')[2], subscription().subscriptionId), if(variables('useRegistry'), variables('registryParts')[4], resourceGroup().name)), 'Microsoft.Resources/deployments', format('konect-registry-role-{0}', variables('suffix')))]"
       ]
     },
     {
@@ -505,6 +519,81 @@
       "dependsOn": [
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name')))]",
         "[resourceId('Microsoft.KeyVault/vaults/keys', variables('vaultName'), 'konect-local-half')]"
+      ]
+    },
+    {
+      "condition": "[and(variables('useRegistry'), parameters('createRoleAssignments'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('konect-registry-role-{0}', variables('suffix'))]",
+      "subscriptionId": "[if(variables('useRegistry'), variables('registryParts')[2], subscription().subscriptionId)]",
+      "resourceGroup": "[if(variables('useRegistry'), variables('registryParts')[4], resourceGroup().name)]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "registryName": {
+            "value": "[variables('registryName')]"
+          },
+          "identityId": {
+            "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name')))]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name'))), '2024-11-30').principalId]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.49.2.45890",
+              "templateHash": "5332541848810625199"
+            }
+          },
+          "parameters": {
+            "registryName": {
+              "type": "string",
+              "metadata": {
+                "description": "The registry."
+              }
+            },
+            "identityId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the user-assigned identity (part of the assignment's stable name)."
+              }
+            },
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Object id of the identity."
+              }
+            }
+          },
+          "variables": {
+            "acrPull": "7f951dda-4ed3-4680-a7ca-43fe172d538d"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), parameters('identityId'), variables('acrPull'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPull'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name')))]"
       ]
     },
     {
@@ -648,7 +737,7 @@
       "metadata": {
         "description": "What to do next."
       },
-      "value": "[if(parameters('createRoleAssignments'), format('Open {0} and click Connect to SparkHub; a Konect manager approves it in SparkHub.', if(empty(parameters('customDomain')), format('https://{0}.{1}', parameters('name'), reference(resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('name'))), '2026-07-01').defaultDomain), format('https://{0}', parameters('customDomain')))), format('First a platform team grants the identity the key role: {0} (Konect stays locked with kms_unavailable until then and heals by itself). Then: {1}', format('az role assignment create --assignee-object-id {0} --assignee-principal-type ServicePrincipal --role {1} --scope {2}', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name'))), '2024-11-30').principalId, variables('cryptoServiceEncryptionUser'), variables('keyResourceId')), format('Open {0} and click Connect to SparkHub; a Konect manager approves it in SparkHub.', if(empty(parameters('customDomain')), format('https://{0}.{1}', parameters('name'), reference(resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('name'))), '2026-07-01').defaultDomain), format('https://{0}', parameters('customDomain'))))))]"
+      "value": "[if(parameters('createRoleAssignments'), format('Open {0} and click Connect to SparkHub; a Konect manager approves it in SparkHub.', if(empty(parameters('customDomain')), format('https://{0}.{1}', parameters('name'), reference(resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('name'))), '2026-07-01').defaultDomain), format('https://{0}', parameters('customDomain')))), format('First a platform team grants the identity the key role: {0} (Konect stays locked with kms_unavailable until then and heals by itself){1}. Then: {2}', format('az role assignment create --assignee-object-id {0} --assignee-principal-type ServicePrincipal --role {1} --scope {2}', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name'))), '2024-11-30').principalId, variables('cryptoServiceEncryptionUser'), variables('keyResourceId')), if(variables('useRegistry'), format(', and AcrPull on the registry: {0} (the container cannot start until then)', format('az role assignment create --assignee-object-id {0} --assignee-principal-type ServicePrincipal --role 7f951dda-4ed3-4680-a7ca-43fe172d538d --scope {1}', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name'))), '2024-11-30').principalId, parameters('registryId'))), ''), format('Open {0} and click Connect to SparkHub; a Konect manager approves it in SparkHub.', if(empty(parameters('customDomain')), format('https://{0}.{1}', parameters('name'), reference(resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('name'))), '2026-07-01').defaultDomain), format('https://{0}', parameters('customDomain'))))))]"
     }
   }
 }

@@ -14,7 +14,7 @@ Metadata:
       - Label: { default: Network and TLS }
         Parameters: [VpcId, AlbSubnetIds, TaskSubnetIds, AssignPublicIp, DbSubnetIds, DomainName, CertificateArn, HostedZoneId]
       - Label: { default: Sizes }
-        Parameters: [DbInstanceClass, TaskCpu, TaskMemory]
+        Parameters: [DbInstanceClass, TaskCpu, TaskMemory, DbDeletionProtection]
       - Label: { default: Account policies }
         Parameters: [PermissionsBoundaryArn, CreateEcsServiceLinkedRole]
       - Label: { default: Restore only }
@@ -85,6 +85,11 @@ Parameters:
     Type: String
     Default: db.t4g.micro
     Description: RDS instance class.
+  DbDeletionProtection:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: RDS deletion protection. scripts/aws.sh creates the stack with false (so a failed create can roll back) and sets true once the create succeeds.
   TaskCpu:
     Type: String
     Default: "512"
@@ -139,7 +144,9 @@ Resources:
   KmsKey:
     Type: AWS::KMS::Key
     Condition: CreateKey
-    DeletionPolicy: Retain
+    # Retained on delete and replace, but a key made by a create that fails is scheduled for deletion with the rollback
+    # (nothing was ever wrapped with it).
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       Description: !Sub Konect ${AWS::StackName} local key half (L)
@@ -258,7 +265,7 @@ Resources:
       MultiAZ: false
       BackupRetentionPeriod: 7
       CopyTagsToSnapshot: true
-      DeletionProtection: true
+      DeletionProtection: !Ref DbDeletionProtection
       AutoMinorVersionUpgrade: true
       Tags:
         - { Key: app, Value: konect }

@@ -34,6 +34,9 @@ param imageKind string = 'bootstrap'
 @description('Container image, pinned by digest. Default: the bootstrap image this template release was tested with. strict: your image (for example myregistry.azurecr.io/konect@sha256:...).')
 param image string = 'ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:bbd47e455e4463aa013052bf47409bee9e99ec418c5314607565328dcf9b4903'
 
+@description('Private registry only: the resource ID of the Azure Container Registry that holds image (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ContainerRegistry/registries/<name>). The managed identity pulls from it; createRoleAssignments=true grants it AcrPull on the registry. Empty: a public image (the default bootstrap image needs none).')
+param registryId string = ''
+
 @description('The install token from SparkHub (Konect, Install; starts with kit_). Required with imageKind bootstrap; must be entered again on every redeploy. Stored only as a Container Apps secret.')
 @secure()
 param installToken string = ''
@@ -102,6 +105,12 @@ var keyIdOk = empty(existingKeyId)
   : length(keyIdParts) == 11
       ? toLower(join(take(skip(keyIdParts, 5), 3), '/')) == 'providers/microsoft.keyvault/vaults' && toLower(keyIdParts[9]) == 'keys'
       : false
+var registryParts = split(registryId, '/')
+var registryOk = empty(registryId)
+  ? true
+  : length(registryParts) == 9
+      ? toLower(join(take(skip(registryParts, 5), 3), '/')) == 'providers/microsoft.containerregistry/registries'
+      : false
 
 var inputError = !nameOk
   ? 'name must be lowercase letters, digits or hyphens, starting with a letter'
@@ -115,7 +124,9 @@ var inputError = !nameOk
                   ? 'image is required (the bootstrap image pinned by digest, or your strict image)'
                   : !keyIdOk
                       ? 'existingKeyId must be a key resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/keys/<key>'
-                      : ''
+                      : !registryOk
+                          ? 'registryId must be a container registry resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ContainerRegistry/registries/<name>'
+                          : ''
 var checkedVersion = empty(inputError) ? konectVersion : string(any(json('{}'))[inputError])
 
 // ── Names ────────────────────────────────────────────────────────────────────
@@ -133,6 +144,10 @@ var keyResourceId = resourceId(keySubscription, keyResourceGroup, 'Microsoft.Key
 // The versionless key URI: Konect records the version it wraps with, so a new key version never breaks a store.
 var keyUri = 'https://${keyVaultName}${environment().suffixes.keyvaultDns}/keys/${keyName}'
 var cryptoServiceEncryptionUser = 'e147488a-f6f5-4113-8e2d-b22465e65bf6'
+var useRegistry = !empty(registryId)
+// Ternaries: registryParts[8] exists only for a valid registryId.
+var registryName = useRegistry && registryOk ? registryParts[8] : ''
+var registryServer = '${registryName}${environment().suffixes.acrLoginServer}'
 var tags = {
   app: 'konect'
 }
@@ -212,6 +227,17 @@ module keyRole 'modules/key-role.bicep' = if (createRoleAssignments) {
   dependsOn: [
     key
   ]
+}
+
+// AcrPull on a private registry (registryId). Before the app: Container Apps pulls the image when it creates revision 1.
+module registryRole 'modules/registry-role.bicep' = if (useRegistry && createRoleAssignments) {
+  name: 'konect-registry-role-${suffix}'
+  scope: resourceGroup(useRegistry ? registryParts[2] : subscription().subscriptionId, useRegistry ? registryParts[4] : resourceGroup().name)
+  params: {
+    registryName: registryName
+    identityId: identity.id
+    principalId: identity.properties.principalId
+  }
 }
 
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2026-10-01' = if (empty(postgresServerName)) {
@@ -394,6 +420,15 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
             }
           ]
         : []
+      // A private registry is pulled with the managed identity (no registry password anywhere).
+      registries: useRegistry
+        ? [
+            {
+              server: registryServer
+              identity: identity.id
+            }
+          ]
+        : []
       ingress: {
         external: true
         targetPort: 41800
@@ -459,13 +494,15 @@ resource app 'Microsoft.App/containerApps@2026-07-01' = {
   dependsOn: [
     postgresAdmin
     firewall
+    registryRole
   ]
 }
 
 // ── Outputs (never the token) ────────────────────────────────────────────────
 
 var roleCommand = 'az role assignment create --assignee-object-id ${identity.properties.principalId} --assignee-principal-type ServicePrincipal --role ${cryptoServiceEncryptionUser} --scope ${keyResourceId}'
-var openStep = 'Open ${baseUrl} and click Connect to SparkHub; a Konect manager approves it in SparkHub.'
+var registryRoleCommand = 'az role assignment create --assignee-object-id ${identity.properties.principalId} --assignee-principal-type ServicePrincipal --role 7f951dda-4ed3-4680-a7ca-43fe172d538d --scope ${registryId}'
+var openStep ='Open ${baseUrl} and click Connect to SparkHub; a Konect manager approves it in SparkHub.'
 
 @description('The instance URL.')
 output url string = baseUrl
@@ -494,4 +531,4 @@ output identityPrincipalId string = identity.properties.principalId
 @description('What to do next.')
 output nextStep string = createRoleAssignments
   ? openStep
-  : 'First a platform team grants the identity the key role: ${roleCommand} (Konect stays locked with kms_unavailable until then and heals by itself). Then: ${openStep}'
+  : 'First a platform team grants the identity the key role: ${roleCommand} (Konect stays locked with kms_unavailable until then and heals by itself)${useRegistry ? ', and AcrPull on the registry: ${registryRoleCommand} (the container cannot start until then)' : ''}. Then: ${openStep}'

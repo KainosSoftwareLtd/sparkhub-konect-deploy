@@ -44,6 +44,7 @@ identity's name.
 | `konectVersion` | required | `X.Y.Z` (`X.Y.Z-rc.N` on preprod). No `latest` |
 | `imageKind` | `bootstrap` | `strict`: your image built with `strict/Dockerfile`; no token is stored anywhere |
 | `image` | the bootstrap image of this release, by digest | `strict`: your image |
+| `registryId` | empty | The image is in a **private** Azure Container Registry (for example your strict image): its resource ID. The managed identity pulls it (no registry password); with `createRoleAssignments` the template grants it `AcrPull` on the registry, else `nextStep` shows the command. Not needed for the public bootstrap image |
 | `installToken` | | Required with `bootstrap`. Kept only as a Container Apps secret. Enter it again on every redeploy |
 | `sparkhub` | `prod` | `preprod` for testing against SparkHub preprod |
 | `customDomain` | empty | Empty: the generated `https://<name>.<environment domain>`. Bind your domain to the Container App afterwards |
@@ -69,6 +70,13 @@ SparkHub.
   ```bash
   az role assignment create --assignee-object-id <identityPrincipalId> --assignee-principal-type ServicePrincipal \
     --role e147488a-f6f5-4113-8e2d-b22465e65bf6 --scope <keyId>
+  ```
+  With `registryId` (a private registry) as well, the first deploy **stops at the Container App** ("unable to pull
+  image using Managed identity"): the identity `<name>-id` exists but may not pull yet. The platform team grants it
+  `AcrPull` on the registry (and the key role above), then you run the same deploy again:
+  ```bash
+  az role assignment create --assignee-object-id "$(az identity show -g <rg> -n <name>-id --query principalId -o tsv)" \
+    --assignee-principal-type ServicePrincipal --role 7f951dda-4ed3-4680-a7ca-43fe172d538d --scope <registryId>
   ```
 
 ## Command line
