@@ -37,19 +37,28 @@ func TestHelperExec(t *testing.T) {
 	}
 	size, sha := fileHash(t, path)
 	forceMemfd = os.Getenv("EXECFD_MEMFD") == "1"
-	err = Exec(f, size, sha, []string{"echo", "hello-from-exec"}, []string{"PATH=/usr/bin:/bin"}, func(p string) {
+	// The target is a copy of this test binary, run as TestHelperEcho.
+	argv := []string{"konect", "-test.run=^TestHelperEcho$"}
+	err = Exec(f, size, sha, argv, []string{"PATH=/usr/bin:/bin", "EXECFD_ECHO=hello-from-exec"}, func(p string) {
 		fmt.Fprintln(os.Stderr, "path="+p)
 	})
 	fmt.Fprintln(os.Stderr, "exec failed:", err)
 	os.Exit(3)
 }
 
-func TestExec(t *testing.T) {
-	echo, err := exec.LookPath("echo")
-	if err != nil {
-		t.Skip("no echo binary")
+// TestHelperEcho is what the exec'd copy runs: it prints EXECFD_ECHO and exits.
+func TestHelperEcho(t *testing.T) {
+	msg := os.Getenv("EXECFD_ECHO")
+	if msg == "" {
+		t.Skip("helper process")
 	}
-	src, err := os.ReadFile(echo)
+	fmt.Println(msg)
+	os.Exit(0)
+}
+
+func TestExec(t *testing.T) {
+	// A copy of this test binary is the "Konect" to exec (a multicall coreutils echo refuses an fd exec's name).
+	src, err := os.ReadFile(os.Args[0])
 	if err != nil {
 		t.Fatal(err)
 	}
