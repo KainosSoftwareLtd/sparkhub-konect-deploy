@@ -71,6 +71,13 @@ SparkHub.
   az role assignment create --assignee-object-id <identityPrincipalId> --assignee-principal-type ServicePrincipal \
     --role e147488a-f6f5-4113-8e2d-b22465e65bf6 --scope <keyId>
   ```
+  With `registryId` (a private registry) as well, the first deploy **stops at the Container App** ("unable to pull
+  image using Managed identity"): the identity `<name>-id` exists but may not pull yet. The platform team grants it
+  `AcrPull` on the registry (and the key role above), then you run the same deploy again:
+  ```bash
+  az role assignment create --assignee-object-id "$(az identity show -g <rg> -n <name>-id --query principalId -o tsv)" \
+    --assignee-principal-type ServicePrincipal --role 7f951dda-4ed3-4680-a7ca-43fe172d538d --scope <registryId>
+  ```
 
 ## Command line
 

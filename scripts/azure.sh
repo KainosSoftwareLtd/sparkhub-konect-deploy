@@ -152,7 +152,34 @@ if [ "$APPLY" = 0 ]; then
   exit 0
 fi
 [ "$RG_EXISTS" = 1 ] || azs group create -n "$RG" -l "$LOCATION" -o none
+if [ "$(pget createRoleAssignments || true)" = false ] && phas registryId; then
+  say "note: --no-role-assignments with --registry-id: until the identity $NAME-id has AcrPull on the registry, the deploy"
+  say "      stops at the Container App ('unable to pull image using Managed identity'). A platform team then runs"
+  say "        az role assignment create --assignee-object-id \$(az identity show -g $RG -n $NAME-id --query principalId -o tsv) \\"
+  say "          --assignee-principal-type ServicePrincipal --role 7f951dda-4ed3-4680-a7ca-43fe172d538d --scope $(pget registryId)"
+  say "      plus the key role from the nextStep output, and you run this command again."
+fi
 say "deploying (about 20 minutes on a first deploy, most of it the Container Apps environment)…"
-azs deployment group create -g "$RG" -n konect -f "$TEMPLATE" -p @"$PARAMS" \
-  --query 'properties.outputs.{url:url.value, keyId:keyId.value, postgresServer:postgresServer.value, nextStep:nextStep.value}' -o json
+OUT=$(azs deployment group create -g "$RG" -n konect -f "$TEMPLATE" -p @"$PARAMS" \
+  --query 'properties.outputs.{url:url.value, keyId:keyId.value, postgresServer:postgresServer.value, nextStep:nextStep.value}' -o json)
+printf '%s\n' "$OUT"
 say "Expect at most one container restart in the first ten minutes (the new Entra administrator takes a few minutes)."
+
+# A container that cannot start (a wrong or revoked install token exits 78) does not fail the deployment: ask Konect.
+URL=$(jq -r '.url // empty' <<<"$OUT" 2>/dev/null || true)
+if [ -n "$URL" ] && command -v curl >/dev/null 2>&1; then
+  say "waiting for Konect at $URL/v1/health (up to ${HEALTH_WAIT_SECONDS:=480} s)…"
+  up=""
+  for _ in $(seq 1 $((HEALTH_WAIT_SECONDS / 15))); do
+    if h=$(curl -fsS --max-time 10 "$URL/v1/health" 2>/dev/null) && [ -n "$h" ]; then up=$h; break; fi
+    sleep 15
+  done
+  if [ -n "$up" ]; then
+    say "Konect $(jq -r '.version' <<<"$up") answers: $(jq -r '.status + (if .locked then " (" + .locked.code + ")" else "" end)' <<<"$up")"
+  else
+    say "Konect does not answer yet. The deployment succeeded, but the container may be failing to start: a wrong or"
+    say "revoked install token, or an unknown version, stops it (exit 78) and Azure restarts it in a loop. Look at:"
+    say "  az containerapp logs show -g $RG -n $NAME${SUB:+ --subscription \"$SUB\"} --type console --tail 20"
+    exit 1
+  fi
+fi
