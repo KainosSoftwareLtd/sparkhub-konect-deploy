@@ -27,12 +27,13 @@ type Key struct {
 //   - konect-release-a: alias/konect-release-a (enabled, signs releases)
 //   - konect-release-b: alias/konect-release-b (created disabled; enabled only for a planned rotation or a compromise)
 //
-// PENDING Phase 0c (2026-11-17): neither slot exists yet. A release build refuses to publish a bootstrap that trusts no
-// key (the release workflow checks `konect-bootstrap version --json`), and every verification fails closed
-// (keys_not_pinned) meanwhile.
+// Created 2026-11-17 (Phase 0c, us-east-2). Slot B is disabled in KMS; it is trusted here so a rotation needs no new
+// bootstrap. The strings equal the train's KONECT_RELEASE_SIGNING_KEYS (sparkhub-workday-gateway 1.52.1).
+// SHA-256 of the DER: A 02af6f46f192c214f92ed746d823125f9e418a128f5bf3ebbd326566423c13b2,
+// B 8f263c1b3eecd8e97335e44b9ef4bbb8e65c296989af953a1726df1006f092b9.
 var releaseKeys = []struct{ ID, SPKI string }{
-	// {"konect-release-a", "<base64 SPKI>"},
-	// {"konect-release-b", "<base64 SPKI>"},
+	{"konect-release-a", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElnwhR5ADga3BbSRpm1684vrbZ9s8wmmAN2xvLA0gICE01ZwkdwPMqGpDFQwOnsvYmZop59S57cMBj0AQDDPydQ=="},
+	{"konect-release-b", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7bwkIbEZwsfAomHkHy3LlVYJHm6lqYPc6C1KrJ1nYM6eUfGj0M8AXRSYvB3rLl8f/AX6izHhBDBbvZDA04bt/w=="},
 }
 
 // extraKeys is empty in a release build. The e2e build tag (keys_e2e.go) adds a test key that only the e2e

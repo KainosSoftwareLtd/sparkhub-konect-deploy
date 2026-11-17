@@ -118,3 +118,40 @@ func fixtureKeys(ids []string, spki map[string]string) ([]Key, error) {
 	}
 	return keys, nil
 }
+
+// A real release, signed in AWS KMS by konect-release-a (Konect v0.7.0-rc.1, the GitHub pre-release's
+// manifest.json and manifest.sig.json): the COMPILED keys accept it, on preprod and dev, for every platform; prod
+// refuses it (prerelease).
+func TestRealKMSSignedRelease(t *testing.T) {
+	dir := filepath.Join("..", "..", "fixtures", "konect-release-real", "v0.7.0-rc.1")
+	m, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := os.ReadFile(filepath.Join(dir, "manifest.sig.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := TrustedKeys()
+	for _, env := range []string{"preprod", "dev"} {
+		for p := range artifacts {
+			r, err := Release(m, s, keys, Expect{Version: "0.7.0-rc.1", Environment: env, Platform: p})
+			if err != nil {
+				t.Fatalf("%s %s: %v", env, p, err)
+			}
+			if r.KeyID != "konect-release-a" || r.Artifact.Name != ArtifactName(p) ||
+				r.ManifestSHA256 != "eccddd030abd8e7b186a45ec8abce6227456361749bf882394f422a711e2343e" {
+				t.Fatalf("%s %s: %+v", env, p, r)
+			}
+		}
+	}
+	if _, err := Release(m, s, keys, Expect{Version: "0.7.0-rc.1", Environment: "prod", Platform: "linux-x64"}); RuleOf(err) != RuleChannelRefused {
+		t.Fatalf("prod: %v", err)
+	}
+	// One flipped byte in the manifest: no longer signed.
+	bad := append([]byte(nil), m...)
+	bad[len(bad)/2] ^= 1
+	if _, err := Release(bad, s, keys, Expect{Version: "0.7.0-rc.1", Environment: "preprod", Platform: "linux-x64"}); RuleOf(err) != RuleSigNoneValid {
+		t.Fatalf("flipped: %v", err)
+	}
+}
