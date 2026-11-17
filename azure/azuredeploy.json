@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "10127069893060899915"
+      "templateHash": "12590667506429078282"
     },
     "description": "SparkHub Konect on Azure Container Apps, PostgreSQL Flexible Server (Entra sign-in with the managed identity) and a Key Vault key. Takes about 20 minutes, most of it the Container Apps environment."
   },
@@ -47,7 +47,7 @@
     },
     "image": {
       "type": "string",
-      "defaultValue": "",
+      "defaultValue": "ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:bbd47e455e4463aa013052bf47409bee9e99ec418c5314607565328dcf9b4903",
       "metadata": {
         "description": "Container image, pinned by digest. Default: the bootstrap image this template release was tested with. strict: your image (for example myregistry.azurecr.io/konect@sha256:...)."
       }

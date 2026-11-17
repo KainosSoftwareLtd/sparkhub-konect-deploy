@@ -32,7 +32,7 @@ param konectVersion string
 param imageKind string = 'bootstrap'
 
 @description('Container image, pinned by digest. Default: the bootstrap image this template release was tested with. strict: your image (for example myregistry.azurecr.io/konect@sha256:...).')
-param image string = ''
+param image string = 'ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:bbd47e455e4463aa013052bf47409bee9e99ec418c5314607565328dcf9b4903'
 
 @description('The install token from SparkHub (Konect, Install; starts with kit_). Required with imageKind bootstrap; must be entered again on every redeploy. Stored only as a Container Apps secret.')
 @secure()
