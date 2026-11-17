@@ -21,6 +21,8 @@ Usage: scripts/azure.sh --resource-group <rg> --version <X.Y.Z> [options]
   --subscription <id|name>     passed to every az call (default: the CLI's current subscription)
   --sparkhub prod|preprod      which SparkHub (default \$KONECT_SPARKHUB or prod)
   --image <ref@sha256:…>       override the template's pinned bootstrap image
+  --registry-id <acr id>       the image is in this private Azure Container Registry (resource ID): pulled with the
+                               managed identity, which the template grants AcrPull (unless --no-role-assignments)
   --strict                     imageKind strict: --image is your strict image; no install token anywhere
   --custom-domain <host>       KONECT_BASE_URL host (bind the domain to the Container App afterwards)
   --no-purge-protection        Key Vault without purge protection (test deployments you will delete)
@@ -46,6 +48,7 @@ while [ $# -gt 0 ]; do
     --version) VERSION=$2; shift ;;
     --sparkhub) pset sparkhub "$2"; shift ;;
     --image) pset image "$2"; shift ;;
+    --registry-id) pset registryId "$2"; shift ;;
     --strict) pset imageKind strict ;;
     --custom-domain) pset customDomain "$2"; shift ;;
     --purge-protection) pset purgeProtection "$2"; shift ;;
@@ -85,7 +88,7 @@ if [ -n "$PREV_NAME" ]; then
   [ -z "$NAME" ] || [ "$NAME" = "$PREV_NAME" ] || die "resource group $RG holds the deployment '$PREV_NAME'; --name cannot change on a redeploy"
   NAME=$PREV_NAME
   say "redeploy of '$NAME' (was $(prev konectVersion)): settings not given as flags are kept"
-  for k in sparkhub image imageKind customDomain createRoleAssignments purgeProtection existingKeyId postgresServerName \
+  for k in sparkhub image imageKind registryId customDomain createRoleAssignments purgeProtection existingKeyId postgresServerName \
            postgresSku postgresTier postgresStorageGb cpu memory; do
     phas "$k" || [ -z "$(prev "$k")" ] || pset "$k" "$(prev "$k")"
   done

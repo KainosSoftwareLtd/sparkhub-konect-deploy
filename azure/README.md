@@ -44,6 +44,7 @@ identity's name.
 | `konectVersion` | required | `X.Y.Z` (`X.Y.Z-rc.N` on preprod). No `latest` |
 | `imageKind` | `bootstrap` | `strict`: your image built with `strict/Dockerfile`; no token is stored anywhere |
 | `image` | the bootstrap image of this release, by digest | `strict`: your image |
+| `registryId` | empty | The image is in a **private** Azure Container Registry (for example your strict image): its resource ID. The managed identity pulls it (no registry password); with `createRoleAssignments` the template grants it `AcrPull` on the registry, else `nextStep` shows the command. Not needed for the public bootstrap image |
 | `installToken` | | Required with `bootstrap`. Kept only as a Container Apps secret. Enter it again on every redeploy |
 | `sparkhub` | `prod` | `preprod` for testing against SparkHub preprod |
 | `customDomain` | empty | Empty: the generated `https://<name>.<environment domain>`. Bind your domain to the Container App afterwards |

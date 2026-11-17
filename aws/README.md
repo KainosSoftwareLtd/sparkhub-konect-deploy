@@ -21,8 +21,8 @@ console button yet: the form would open on the same VPC, subnet, domain and cert
 |---|---|
 | ECS cluster, task definition, service | Fargate ARM64, one task, read-only root file system, deployment circuit breaker with rollback |
 | Application Load Balancer | HTTPS 443 (`ELBSecurityPolicy-TLS13-1-2-2021-06`), HTTP 80 redirects; health check `GET /v1/health` |
-| RDS PostgreSQL 16 | `db.t4g.micro`, encrypted, private, 7-day backups, deletion protection, **RDS-managed master password** |
-| KMS key + alias `alias/<stack>-local-half` | Wraps Konect's local key half. **Retained** when the stack is deleted |
+| RDS PostgreSQL 16 | `db.t4g.micro`, encrypted, private, 7-day backups, deletion protection (switched on by `aws.sh` once the create succeeds), **RDS-managed master password** |
+| KMS key + alias `alias/<stack>-local-half` | Wraps Konect's local key half. **Retained** when the stack is deleted (not when the create itself fails) |
 | Secrets Manager secret | The install token (bootstrap only) |
 | Two IAM roles | Execution role (pull, logs, the token secret); task role (the KMS key with Konect's encryption context, the database secret) |
 | Security groups, log group (30 days), optional Route 53 record, optional ECS service-linked role | |
@@ -54,6 +54,15 @@ Secrets Manager. A strict image (`strict/Dockerfile`) goes with `--strict --imag
 
 The install token can be read by anyone with `secretsmanager:GetSecretValue` on the secret the stack creates. That is
 by design: it only downloads Konect.
+
+### A failed create
+
+If the first task cannot start (a wrong install token, an unknown version, no route to SparkHub), the deployment circuit
+breaker stops after three failed tasks and CloudFormation rolls the whole stack back (about 15 minutes in all). The
+database is created without deletion protection for exactly this reason (`aws.sh` turns it on after a successful
+create), and the new KMS key is deleted with the rollback. What stays: the database's final snapshot (empty; delete it)
+and, with `--create-ecs-service-linked-role`, the account's ECS service-linked role. The task's log in the stack's log
+group says why it stopped. Fix the cause and run the same command again.
 
 ## Update and roll back
 

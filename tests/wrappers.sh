@@ -35,14 +35,14 @@ EOF
 cat >"$WORK/bin/aws" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB/argv.log"
-for a in "$@"; do case $a in file://*) f=${a#file://}; cp "$f" "$STUB/params.json"; ls -l "$f" | cut -c1-10 >"$STUB/params.mode" ;; esac; done
+for a in "$@"; do case $a in file://*) f=${a#file://}; cp "$f" "$STUB/params.json"; [ -f "$STUB/first-params.json" ] || cp "$f" "$STUB/first-params.json"; ls -l "$f" | cut -c1-10 >"$STUB/params.mode" ;; esac; done
 case " $* " in
   *" describe-stacks "*) if [ -f "$STUB/stack-status" ]; then cat "$STUB/stack-status"; else echo "Stack does not exist" >&2; exit 254; fi ;;
   *" list-change-sets "*) echo arn:aws:cloudformation:eu-west-2:111111111111:changeSet/x/1 ;;
 esac
 EOF
 chmod +x "$WORK/bin/az" "$WORK/bin/aws"
-reset() { rm -f "$WORK"/argv.log "$WORK"/params.json "$WORK"/params.mode "$WORK"/prev.json "$WORK"/rg-exists "$WORK"/stack-status; }
+reset() { rm -f "$WORK"/first-params.json "$WORK"/argv.log "$WORK"/params.json "$WORK"/params.mode "$WORK"/prev.json "$WORK"/rg-exists "$WORK"/stack-status; }
 param() { jq -r --arg k "$1" '.parameters[$k] | if . == null then "<none>" else (.value | tostring) end' "$WORK/params.json"; }
 
 # ── azure.sh ────────────────────────────────────────────────────────────────
@@ -70,6 +70,15 @@ check "azure: needs the token without a prompt" '! env -u KONECT_INSTALL_TOKEN "
 reset; echo true >"$WORK/rg-exists"
 env -u KONECT_INSTALL_TOKEN "$BASH" "$ROOT/scripts/azure.sh" --resource-group rg1 --version 0.7.0 --strict --image reg.example/konect@sha256:ab --non-interactive 2>/dev/null || true
 check "azure: strict sends no token" '[ "$(param imageKind)/$(param installToken)" = "strict/<none>" ]'
+reset; echo true >"$WORK/rg-exists"
+ACR=/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.ContainerRegistry/registries/acr1
+KONECT_INSTALL_TOKEN=$TOKEN "$BASH" "$ROOT/scripts/azure.sh" --resource-group rg1 --version 0.7.0 --image acr1.azurecr.io/b@sha256:ab \
+  --registry-id "$ACR" --non-interactive 2>/dev/null || true
+check "azure: --registry-id" '[ "$(param registryId)" = "$ACR" ]'
+reset; echo true >"$WORK/rg-exists"
+printf '{"name":{"value":"konect"},"konectVersion":{"value":"0.7.0"},"image":{"value":"acr1.azurecr.io/b@sha256:ab"},"registryId":{"value":"%s"}}' "$ACR" >"$WORK/prev.json"
+KONECT_INSTALL_TOKEN=$TOKEN "$BASH" "$ROOT/scripts/azure.sh" --resource-group rg1 --version 0.7.1 --non-interactive 2>/dev/null || true
+check "azure: redeploy keeps the registry" '[ "$(param image)/$(param registryId)" = "acr1.azurecr.io/b@sha256:ab/$ACR" ]'
 
 # ── aws.sh ──────────────────────────────────────────────────────────────────
 FIRST=(--region eu-west-2 --version 0.7.0 --domain konect.example.com --certificate-arn arn:aws:acm:eu-west-2:111111111111:certificate/abc
@@ -83,6 +92,11 @@ check "aws: parameters file is 0600" 'grep -q "^-rw-------" "$WORK/params.mode"'
 check "aws: token never on argv" '! grep -q kit_ "$WORK/argv.log"'
 check "aws: token never printed" '! grep -q kit_ "$WORK/err"'
 check "aws: every call names the region and profile" '! grep -v -- "--region eu-west-2 --profile p1" "$WORK/argv.log" | grep -q .'
+
+reset
+KONECT_INSTALL_TOKEN=$TOKEN "$BASH" "$ROOT/scripts/aws.sh" "${FIRST[@]}" --non-interactive --apply 2>/dev/null >/dev/null || true
+check "aws: a first deploy creates without deletion protection" 'grep -q "DbDeletionProtection=false" "$STUB/first-params.json"'
+check "aws: then turns deletion protection on" '[ "$(grep -c "cloudformation deploy" "$WORK/argv.log")" = 2 ] && grep -q "parameter-overrides DbDeletionProtection=true" "$WORK/argv.log"'
 
 reset
 check "aws: a first deploy needs the network flags" '! KONECT_INSTALL_TOKEN=$TOKEN "$BASH" "$ROOT/scripts/aws.sh" --region eu-west-2 --version 0.7.0 --non-interactive 2>/dev/null >/dev/null'

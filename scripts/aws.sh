@@ -35,7 +35,7 @@ EOF
   exit 2
 }
 
-STACK=konect REGION="" PROFILE=""
+STACK=konect REGION="" PROFILE="" PROTECT_AFTER=0
 [ -z "${KONECT_SPARKHUB:-}" ] || pset SparkHub "$KONECT_SPARKHUB"
 while [ $# -gt 0 ]; do
   case $1 in
@@ -79,6 +79,9 @@ if [ -z "$STATUS" ] || [ "$STATUS" = REVIEW_IN_PROGRESS ]; then
     [ -n "$(pget "$k")" ] || die "a first deploy needs $k (--help)"
   done
   NEW=1
+  # Created without RDS deletion protection so that a failed create rolls back completely (a protected instance makes
+  # the rollback fail and stay behind); switched on below once the create succeeds.
+  phas DbDeletionProtection || { pset DbDeletionProtection false; PROTECT_AFTER=1; }
 else
   say "stack $STACK exists ($STATUS): parameters not given keep their current values"
   NEW=0
@@ -121,4 +124,9 @@ if [ "$APPLY" = 0 ]; then
 fi
 say "deploying (about 15 minutes on a first deploy, most of it RDS)…"
 awsr "${args[@]}"
+if [ "$PROTECT_AFTER" = 1 ]; then
+  say "created; turning on the database's deletion protection (a parameter-only update, about a minute)…"
+  awsr cloudformation deploy --stack-name "$STACK" --template-file "$TEMPLATE" --capabilities CAPABILITY_IAM \
+    --parameter-overrides DbDeletionProtection=true --tags app=konect --no-fail-on-empty-changeset
+fi
 awsr cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output text
