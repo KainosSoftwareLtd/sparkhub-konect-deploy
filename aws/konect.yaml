@@ -161,7 +161,8 @@ Resources:
             Action: kms:*
             Resource: "*"
           # The task role by condition, not as a principal: KMS does not reject the policy while the new role
-          # propagates. The role's own policy grants the same, with the same encryption context.
+          # propagates. The role's own policy grants the same, with the same encryption context. Konect wraps two
+          # things with this key: the local half (purpose local-half) and its SparkHub instance key (instance-key).
           - Sid: KonectLocalHalf
             Effect: Allow
             Principal: { AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root" }
@@ -169,7 +170,7 @@ Resources:
             Resource: "*"
             Condition:
               ArnEquals: { aws:PrincipalArn: !GetAtt TaskRole.Arn }
-              StringEquals: { kms:EncryptionContext:app: konect, kms:EncryptionContext:purpose: local-half }
+              StringEquals: { kms:EncryptionContext:app: konect, kms:EncryptionContext:purpose: [local-half, instance-key] }
       Tags:
         - { Key: app, Value: konect }
 
@@ -327,7 +328,7 @@ Resources:
             Action: [kms:Encrypt, kms:Decrypt]
             Resource: !If [CreateKey, !GetAtt KmsKey.Arn, !Ref ExistingKmsKeyArn]
             Condition:
-              StringEquals: { kms:EncryptionContext:app: konect, kms:EncryptionContext:purpose: local-half }
+              StringEquals: { kms:EncryptionContext:app: konect, kms:EncryptionContext:purpose: [local-half, instance-key] }
           - Sid: DatabasePassword
             Effect: Allow
             Action: secretsmanager:GetSecretValue
