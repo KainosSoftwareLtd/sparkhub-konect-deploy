@@ -32,7 +32,7 @@ param konectVersion string
 param imageKind string = 'bootstrap'
 
 @description('Container image, pinned by digest. Default: the bootstrap image this template release was tested with. strict: your image (for example myregistry.azurecr.io/konect@sha256:...).')
-param image string = 'ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:bbd47e455e4463aa013052bf47409bee9e99ec418c5314607565328dcf9b4903'
+param image string = 'ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:5a9bd5fb82f0e10f5f9613c1e938c6b7bc5f61b775880285d540b3cba5b0d76a'
 
 @description('Private registry only: the resource ID of the Azure Container Registry that holds image (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ContainerRegistry/registries/<name>). The managed identity pulls from it; createRoleAssignments=true grants it AcrPull on the registry. Empty: a public image (the default bootstrap image needs none).')
 param registryId string = ''

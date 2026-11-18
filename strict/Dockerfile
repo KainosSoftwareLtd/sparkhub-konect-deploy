@@ -18,7 +18,7 @@
 
 # The bootstrap image, pinned by digest. Pass the digest SparkHub shows; the default is the release this file was
 # published with.
-ARG BOOTSTRAP=ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:bbd47e455e4463aa013052bf47409bee9e99ec418c5314607565328dcf9b4903
+ARG BOOTSTRAP=ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:5a9bd5fb82f0e10f5f9613c1e938c6b7bc5f61b775880285d540b3cba5b0d76a
 # gcr.io/distroless/cc-debian12:nonroot (multi-arch index)
 ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 

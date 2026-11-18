@@ -34,7 +34,7 @@ Parameters:
   Image:
     Type: String
     MinLength: 1
-    Default: ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:bbd47e455e4463aa013052bf47409bee9e99ec418c5314607565328dcf9b4903
+    Default: ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:5a9bd5fb82f0e10f5f9613c1e938c6b7bc5f61b775880285d540b3cba5b0d76a
     Description: Container image pinned by digest (multi-arch, arm64). The bootstrap image of this template release, or your strict image.
   InstallToken:
     Type: String
