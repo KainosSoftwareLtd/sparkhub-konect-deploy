@@ -79,6 +79,31 @@ Konect in time (the platform restarts it); **143** = SIGTERM during a download.
 Egress: `<org>.sparkhub.studio` (or `.sparkhub.guru`), the release bucket (`sparkhub-kainos-global.s3.us-east-2.amazonaws.com`
 for prod), and for the image pull `ghcr.io` and `pkg-containers.githubusercontent.com`.
 
+## Releases and tags
+
+This repository has two kinds of tag, both created only by the repository admins (the `release-tags` ruleset):
+
+| Tag | What it is | What runs |
+|---|---|---|
+| `v<semver>` | a **bootstrap release** | `release.yml`: binaries, image, attestations, GitHub Release |
+| `templates-v<semver>` | a **templates release**: the deployment templates (`azure/`, `aws/`, `strict/`, `scripts/`) at a commit whose defaults pin a published bootstrap image by digest | nothing; the tag is only a fixed ref |
+
+A bootstrap tag can never pin its own image: the digest exists only after that tag's build. So the templates are
+versioned separately, and the Deploy to Azure button, the CLI snippets and SparkHub's Install page all point at the
+latest `templates-v*` tag, never at a `v*` tag.
+
+**The rule:** after each bootstrap release `vX.Y.Z`, open a PR that pins its image index digest (from the release
+notes) in `azure/main.bicep` (then `scripts/build-azure.sh`), `aws/konect.yaml` and `strict/Dockerfile`, merge it,
+and tag the merge commit on `main` as the next `templates-v*` (patch bump for a digest-only change). Then move the
+button in [`azure/README.md`](azure/README.md) and SparkHub's templates version (Platform Config
+`KONECT_TEMPLATES_VERSION`) to the new tag.
+
+| Templates tag | Bootstrap image it pins |
+|---|---|
+| `templates-v1.0.1` | `1.0.0` (`sha256:5a9bd5fb82f0e10f5f9613c1e938c6b7bc5f61b775880285d540b3cba5b0d76a`) |
+
+The `v1.0.0` tag's templates still pin `1.0.0-rc.1`; use `templates-v1.0.1` or later.
+
 ## Verifying what you run
 
 Every release of this repository publishes the four binaries with `SHA256SUMS`, an SPDX SBOM per binary, GitHub

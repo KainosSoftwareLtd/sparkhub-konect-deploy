@@ -1,13 +1,15 @@
 # Konect on Azure
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FKainosSoftwareLtd%2Fsparkhub-konect-deploy%2Fv1.0.0%2Fazure%2Fazuredeploy.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FKainosSoftwareLtd%2Fsparkhub-konect-deploy%2Ftemplates-v1.0.1%2Fazure%2Fazuredeploy.json)
 
-The button deploys `azuredeploy.json` from the release tag in its URL, so it never changes under you. The same
+The button deploys `azuredeploy.json` from the **templates tag** in its URL (`templates-v<version>`, see
+[Releases and tags](../README.md#releases-and-tags)), so it never changes under you and it runs the latest bootstrap
+image by digest. The same
 template runs from the command line with `scripts/azure.sh`. `main.bicep` is the source; `azuredeploy.json` is built
 from it (`scripts/build-azure.sh`) and CI fails when the two differ.
 
 ```
-https://portal.azure.com/#create/Microsoft.Template/uri/<URL-encoded https://raw.githubusercontent.com/KainosSoftwareLtd/sparkhub-konect-deploy/v<release>/azure/azuredeploy.json>
+https://portal.azure.com/#create/Microsoft.Template/uri/<URL-encoded https://raw.githubusercontent.com/KainosSoftwareLtd/sparkhub-konect-deploy/templates-v<version>/azure/azuredeploy.json>
 ```
 
 The URL carries no parameters: the token is typed into the form, never put in a URL.
