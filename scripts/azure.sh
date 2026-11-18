@@ -169,13 +169,23 @@ say "Expect at most one container restart in the first ten minutes (the new Entr
 URL=$(jq -r '.url // empty' <<<"$OUT" 2>/dev/null || true)
 if [ -n "$URL" ] && command -v curl >/dev/null 2>&1; then
   say "waiting for Konect at $URL/v1/health (up to ${HEALTH_WAIT_SECONDS:=480} s)…"
-  up=""
+  # On an update the previous revision keeps answering until the new one is ready: wait for the version asked for.
+  up="" seen=""
   for _ in $(seq 1 $((HEALTH_WAIT_SECONDS / 15))); do
-    if h=$(curl -fsS --max-time 10 "$URL/v1/health" 2>/dev/null) && [ -n "$h" ]; then up=$h; break; fi
+    if h=$(curl -fsS --max-time 10 "$URL/v1/health" 2>/dev/null) && [ -n "$h" ]; then
+      seen=$h
+      [ "$(jq -r '.version // empty' <<<"$h" 2>/dev/null)" = "$VERSION" ] && { up=$h; break; }
+    fi
     sleep 15
   done
   if [ -n "$up" ]; then
     say "Konect $(jq -r '.version' <<<"$up") answers: $(jq -r '.status + (if .locked then " (" + .locked.code + ")" else "" end)' <<<"$up")"
+  elif [ -n "$seen" ]; then
+    say "Konect $(jq -r '.version' <<<"$seen") still answers, not $VERSION: the new revision is not ready. A wrong or revoked"
+    say "install token, or an unknown version, stops it (exit 78) while the previous revision keeps serving. Look at:"
+    say "  az containerapp revision list -g $RG -n $NAME${SUB:+ --subscription \"$SUB\"} -o table"
+    say "  az containerapp logs show -g $RG -n $NAME${SUB:+ --subscription \"$SUB\"} --type console --tail 20"
+    exit 1
   else
     say "Konect does not answer yet. The deployment succeeded, but the container may be failing to start: a wrong or"
     say "revoked install token, or an unknown version, stops it (exit 78) and Azure restarts it in a loop. Look at:"

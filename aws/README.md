@@ -84,8 +84,13 @@ retained, so a snapshot stays readable. **A restore needs the same key and the s
    ```bash
    scripts/aws.sh … --stack-name konect-restored --restore-snapshot <snapshot id> --existing-kms-key <old KmsKeyArn> --apply
    ```
-2. The old key's policy names the old task role, and a stack cannot change a key it does not own. Name the new task
-   role (the new stack's `TaskRoleArn` output) in the old key's `KonectLocalHalf` statement:
+   In the same account that is all: the key policy's `KeyAdministration` statement (the account root) lets IAM
+   policies grant use of the key, and the new stack's task-role policy grants `kms:Encrypt`/`kms:Decrypt` on
+   `ExistingKmsKeyArn` with the same encryption context (checked 2026-11-18: the restored stack started straight into
+   `sparkhub_not_connected`).
+2. Only if the old key's policy does not delegate to IAM (you removed the root statement, or the key is in another
+   account): its `KonectLocalHalf` statement names the old task role, and a stack cannot change a key it does not own.
+   Name the new task role (the new stack's `TaskRoleArn` output) there:
    ```bash
    aws kms get-key-policy --key-id <old key> --policy-name default --query Policy --output text > policy.json
    # edit: aws:PrincipalArn in the KonectLocalHalf statement = the new TaskRoleArn

@@ -102,7 +102,7 @@ umask 077
 tmp="$(mktemp -d 2>/dev/null || mktemp -d -t konect-install)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-say "Downloading the Konect bootstrap $BOOTSTRAP_VERSION for $os/$arch…"
+say "Downloading the Konect bootstrap $BOOTSTRAP_VERSION for ${os}/${arch}…"
 curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp/konect-bootstrap" "$url" || die "download failed: $url"
 got="$(sha256 "$tmp/konect-bootstrap")"
 [ "$got" = "$sum" ] || die "the bootstrap's SHA-256 is $got, SparkHub expects $sum; nothing was installed"

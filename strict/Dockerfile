@@ -10,7 +10,10 @@
 #     --build-arg BOOTSTRAP=ghcr.io/kainossoftwareltd/sparkhub-konect-bootstrap@sha256:<digest from SparkHub → Konect → Install> \
 #     -t <your-registry>/konect:0.7.0 https://github.com/KainosSoftwareLtd/sparkhub-konect-deploy.git#<tag>:strict
 #
-# Preprod and pre-releases: add --build-arg KONECT_SPARKHUB=preprod. Re-verify the image later with
+# Preprod and pre-releases: add --build-arg KONECT_SPARKHUB=preprod. Behind a TLS-inspecting proxy: the predefined
+# --build-arg HTTPS_PROXY=… works as usual, and the proxy's CA goes in as a second secret (a PEM bundle with the public
+# roots and the proxy CA): --secret id=proxy_ca,src=<bundle.pem> --build-arg SSL_CERT_FILE=/run/secrets/proxy_ca.
+# Re-verify the image later with
 # `konect-bootstrap verify /usr/share/konect --binary /usr/local/bin/konect --version 0.7.0` (copy them out first).
 
 # The bootstrap image, pinned by digest. Pass the digest SparkHub shows; the default is the release this file was
@@ -22,8 +25,11 @@ ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7d
 FROM ${BOOTSTRAP} AS fetch
 ARG KONECT_VERSION
 ARG KONECT_SPARKHUB=prod
+# Empty = the image's CA bundle; /run/secrets/proxy_ca with the proxy_ca secret (above)
+ARG SSL_CERT_FILE=
 # exec form: no shell in the image; the ARGs reach the program as environment variables
 RUN --mount=type=secret,id=konect_token,env=KONECT_INSTALL_TOKEN,required=true \
+    --mount=type=secret,id=proxy_ca,target=/run/secrets/proxy_ca,required=false,mode=0444 \
     ["/usr/local/bin/konect-bootstrap", "fetch", "--out", "/tmp/konect-out", "--client", "build"]
 
 FROM ${RUNTIME_IMAGE}
