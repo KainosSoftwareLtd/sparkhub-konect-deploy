@@ -53,6 +53,14 @@ jobs:
       - name: shellcheck
         if: ${{ !cancelled() }}
         run: shellcheck install/install.sh scripts/*.sh
+      # macOS runs install.sh with /bin/sh = bash 3.2, which (in a UTF-8 locale) reads a non-ASCII byte right after
+      # `$name` as part of the name: `$arch…` is an unbound variable, and with the EXIT trap the script exits 0 having
+      # installed nothing. Write `${name}` before any non-ASCII character.
+      - name: no $name before a non-ASCII byte (bash 3.2)
+        if: ${{ !cancelled() }}
+        run: |
+          if perl -ne 'if (/\$[A-Za-z_][A-Za-z0-9_]*[\x80-\xff]/) { print "$ARGV:$.: $_"; $bad = 1 } close ARGV if eof; END { exit($bad ? 1 : 0) }' \
+               install/install.sh scripts/*.sh tests/*.sh; then :; else echo "::error::use \${name} before a non-ASCII character"; exit 1; fi
       - name: gofmt
         if: ${{ !cancelled() }}
         run: |
