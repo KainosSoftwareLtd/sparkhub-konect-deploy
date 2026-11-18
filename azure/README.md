@@ -1,6 +1,6 @@
 # Konect on Azure
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FKainosSoftwareLtd%2Fsparkhub-konect-deploy%2Fv1.1.0%2Fazure%2Fazuredeploy.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FKainosSoftwareLtd%2Fsparkhub-konect-deploy%2Fv1.0.0%2Fazure%2Fazuredeploy.json)
 
 The button deploys `azuredeploy.json` from the release tag in its URL, so it never changes under you. The same
 template runs from the command line with `scripts/azure.sh`. `main.bicep` is the source; `azuredeploy.json` is built
